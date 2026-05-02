@@ -15,18 +15,10 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { DEFAULT_SKIP_DIRS } from './fsUtils.js'
 
-const SKIP_DIRS = new Set([
-  'node_modules',
-  '.git',
-  '.next',
-  '.turbo',
-  '.cache',
-  'dist',
-  'build',
-  '.venv',
-  '__pycache__',
-])
+const SKIP_DIRS = DEFAULT_SKIP_DIRS
+const MAX_WALK_DEPTH = 8
 
 /**
  * Find a file in `dir` with a name similar to `target` (case-insensitive
@@ -70,12 +62,18 @@ export function suggestPathUnderCwd(
   const target = path.basename(missing).toLowerCase()
   if (target.length === 0) return []
   const matches: string[] = []
-  walk(cwd, target, matches, maxResults)
+  walk(cwd, target, matches, maxResults, 0)
   return matches
 }
 
-function walk(dir: string, target: string, out: string[], cap: number): void {
-  if (out.length >= cap) return
+function walk(
+  dir: string,
+  target: string,
+  out: string[],
+  cap: number,
+  depth: number,
+): void {
+  if (out.length >= cap || depth > MAX_WALK_DEPTH) return
   let entries: fs.Dirent[]
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true })
@@ -87,7 +85,7 @@ function walk(dir: string, target: string, out: string[], cap: number): void {
     if (entry.name.startsWith('.')) continue
     if (entry.isDirectory()) {
       if (SKIP_DIRS.has(entry.name)) continue
-      walk(path.join(dir, entry.name), target, out, cap)
+      walk(path.join(dir, entry.name), target, out, cap, depth + 1)
     } else if (entry.isFile() && entry.name.toLowerCase() === target) {
       out.push(path.join(dir, entry.name))
     }

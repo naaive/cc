@@ -16,29 +16,33 @@ function s(
 }
 
 describe('createSkillActivator', () => {
-  test('returns matched skill names on notice', () => {
+  test('queues matched skills via notice', () => {
     const a = createSkillActivator([
       s('auth', ['src/auth/**']),
       s('sql', ['**/*.sql']),
       s('ignored', ['nope/**']),
     ])
-    expect(a.notice('/repo/src/auth/login.ts')).toEqual(['auth'])
-    expect(a.notice('/repo/migrations/001.sql')).toEqual(['sql'])
-    expect(a.notice('/repo/src/foo.ts')).toEqual([])
+    a.notice('/repo/src/auth/login.ts')
+    expect(a.pending()).toEqual(['auth'])
+    a.notice('/repo/migrations/001.sql')
+    expect(new Set(a.pending())).toEqual(new Set(['auth', 'sql']))
+    a.notice('/repo/src/foo.ts')
+    expect(new Set(a.pending())).toEqual(new Set(['auth', 'sql']))
   })
 
   test('skips skills without activatePaths', () => {
     const a = createSkillActivator([
       { name: 'no-paths', description: '', path: '/x/SKILL.md', source: 'user' },
     ])
-    expect(a.notice('/anywhere')).toEqual([])
+    a.notice('/anywhere')
+    expect(a.pending()).toEqual([])
   })
 
   test('drain is idempotent — fired skills don\'t fire again', () => {
     const a = createSkillActivator([s('auth', ['**/auth/**'])])
-    expect(a.notice('/repo/src/auth/x.ts')).toEqual(['auth'])
+    a.notice('/repo/src/auth/x.ts')
     expect(a.drain()).toEqual(['auth'])
-    expect(a.notice('/repo/src/auth/y.ts')).toEqual([])
+    a.notice('/repo/src/auth/y.ts')
     expect(a.drain()).toEqual([])
   })
 

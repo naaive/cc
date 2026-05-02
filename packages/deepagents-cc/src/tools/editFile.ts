@@ -9,9 +9,10 @@ import { z } from 'zod/v4'
 import { TOOL_DESCRIPTIONS, TOOL_NAMES } from './ccToolNames.js'
 import {
   applyDeterministicEdit,
+  enforceBoundary,
   ensureAbsolute,
   isBinaryFile,
-  isWithinAllowedRoots,
+  resolveRoots,
   statMtime,
   writeTextFile,
   type FileStateCache,
@@ -37,13 +38,14 @@ export interface EditToolOptions {
 }
 
 export function createEditTool(options: EditToolOptions) {
-  const cwd = options.cwd ?? process.cwd()
+  const roots = resolveRoots(
+    options.cwd ?? process.cwd(),
+    options.additionalDirectories ?? [],
+  )
   return tool(
     (input: z.infer<typeof schema>) => {
       const abs = ensureAbsolute(input.file_path, 'file_path')
-      if (!isWithinAllowedRoots(abs, cwd, options.additionalDirectories ?? [])) {
-        throw new Error(`${abs} is outside the allowed roots (cwd=${cwd}).`)
-      }
+      enforceBoundary(abs, roots)
       const known = options.fileStateCache.get(abs)
       if (known === undefined) {
         throw new Error(`Read ${abs} before editing it.`)

@@ -116,28 +116,30 @@ export const ccReminders = {
    */
   conditionalSkillActivation(
     activator: SkillActivator,
-    getSkills: () => SkillMetadata[],
+    skillsByName: Map<string, SkillMetadata>,
   ): Reminder {
+    const bodyCache = new Map<string, string>()
     return {
       name: 'skill-activated',
       shouldFire() {
         const drained = activator.drain()
         if (drained.length === 0) return null
-        const skills = getSkills()
-        const bodies = drained
-          .map(name => {
-            const meta = skills.find(s => s.name === name)
-            if (!meta) return null
+        const bodies: string[] = []
+        for (const name of drained) {
+          const meta = skillsByName.get(name)
+          if (!meta) continue
+          let body = bodyCache.get(name)
+          if (body === undefined) {
             try {
-              const body = readSkillBody(meta.path)
-              return `## Skill activated: ${name}\n${meta.description}\n\n${body}`
+              body = readSkillBody(meta.path)
             } catch {
-              return null
+              continue
             }
-          })
-          .filter((s): s is string => s !== null)
-        if (bodies.length === 0) return null
-        return bodies.join('\n\n---\n\n')
+            bodyCache.set(name, body)
+          }
+          bodies.push(`## Skill activated: ${name}\n${meta.description}\n\n${body}`)
+        }
+        return bodies.length === 0 ? null : bodies.join('\n\n---\n\n')
       },
     }
   },

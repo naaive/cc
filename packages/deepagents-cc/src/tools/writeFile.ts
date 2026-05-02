@@ -8,8 +8,9 @@ import { tool } from 'langchain'
 import { z } from 'zod/v4'
 import { TOOL_DESCRIPTIONS, TOOL_NAMES } from './ccToolNames.js'
 import {
+  enforceBoundary,
   ensureAbsolute,
-  isWithinAllowedRoots,
+  resolveRoots,
   statMtime,
   writeTextFile,
   type FileStateCache,
@@ -27,15 +28,14 @@ export interface WriteToolOptions {
 }
 
 export function createWriteTool(options: WriteToolOptions) {
-  const cwd = options.cwd ?? process.cwd()
+  const roots = resolveRoots(
+    options.cwd ?? process.cwd(),
+    options.additionalDirectories ?? [],
+  )
   return tool(
     (input: z.infer<typeof schema>) => {
       const abs = ensureAbsolute(input.file_path, 'file_path')
-      if (!isWithinAllowedRoots(abs, cwd, options.additionalDirectories ?? [])) {
-        throw new Error(
-          `${abs} is outside the allowed roots (cwd=${cwd}).`,
-        )
-      }
+      enforceBoundary(abs, roots)
       const existing = statMtime(abs)
       if (existing !== undefined) {
         const known = options.fileStateCache.get(abs)

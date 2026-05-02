@@ -239,12 +239,10 @@ export function createClaudeCodeAgent(
   if (skills.length > 0) {
     promptAppendixParts.push(buildSkillsListing(skills))
   }
-  // Output style: resolve preset name → OutputStyle, then append.
-  const styleArg = params.outputStyle ?? settings.outputStyle
-  const style: OutputStyle | null =
-    typeof styleArg === 'string'
-      ? getOutputStyle(styleArg, params.outputStyles)
-      : (styleArg ?? null)
+  const style = resolveOutputStyle(
+    params.outputStyle ?? settings.outputStyle,
+    params.outputStyles,
+  )
   if (style) promptAppendixParts.push(formatOutputStyleSection(style))
 
   const systemPrompt = buildSystemPrompt({
@@ -295,11 +293,7 @@ export function createClaudeCodeAgent(
         resultStore: resultStore ?? undefined,
         cwd,
         additionalDirectories,
-        onFileRead: skillActivator
-          ? abs => {
-              skillActivator.notice(abs)
-            }
-          : undefined,
+        onFileRead: skillActivator ? abs => skillActivator.notice(abs) : undefined,
       }),
     )
   if (isEnabled(TOOL_NAMES.Write))
@@ -463,8 +457,9 @@ export function createClaudeCodeAgent(
     )
   }
   if (skillActivator) {
+    const skillsByName = new Map(skills.map(s => [s.name, s] as const))
     reminders.push(
-      ccReminders.conditionalSkillActivation(skillActivator, () => skills),
+      ccReminders.conditionalSkillActivation(skillActivator, skillsByName),
     )
   }
   reminders.push(...(params.reminders ?? []))
@@ -514,6 +509,15 @@ export function createClaudeCodeAgent(
     mcpClient: params.mcpClient ?? null,
     skillActivator,
   }
+}
+
+function resolveOutputStyle(
+  styleArg: string | OutputStyle | undefined,
+  custom: Record<string, OutputStyle> | undefined,
+): OutputStyle | null {
+  if (!styleArg) return null
+  if (typeof styleArg === 'string') return getOutputStyle(styleArg, custom)
+  return styleArg
 }
 
 function buildSkillsListing(skills: SkillMetadata[]): string {

@@ -17,19 +17,9 @@ import path from 'node:path'
 import { tool } from 'langchain'
 import { z } from 'zod/v4'
 import { TOOL_DESCRIPTIONS, TOOL_NAMES } from './ccToolNames.js'
-import { ensureAbsolute, isBinaryFile, truncateLine } from './fsUtils.js'
+import { DEFAULT_SKIP_DIRS, ensureAbsolute, isBinaryFile, truncateLine } from './fsUtils.js'
 
-const SKIP_DIRS = new Set([
-  'node_modules',
-  '.git',
-  '.next',
-  '.turbo',
-  '.cache',
-  'dist',
-  'build',
-  '.venv',
-  '__pycache__',
-])
+const SKIP_DIRS = DEFAULT_SKIP_DIRS
 
 const schema = z.object({
   pattern: z.string().describe('Regex pattern (ripgrep syntax). JavaScript-style; use \\\\ to escape backslashes in JSON.'),

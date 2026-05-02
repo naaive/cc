@@ -18,7 +18,8 @@ import { globToRegex } from '../tools/globRegex.js'
 import type { SkillMetadata } from './loader.js'
 
 export interface SkillActivator {
-  notice(absPath: string): string[]
+  /** Side-effect: queue any skills whose activate-paths match `absPath`. */
+  notice(absPath: string): void
   /** Names noticed but not yet drained. Caller should drain on each turn. */
   pending(): string[]
   drain(): string[]
@@ -46,15 +47,12 @@ export function createSkillActivator(skills: SkillMetadata[]): SkillActivator {
 
   return {
     notice(absPath) {
-      const matched: string[] = []
       for (const c of compiled) {
         if (fired.has(c.name)) continue
         if (c.regexes.some(r => r.test(absPath))) {
           pendingSet.add(c.name)
-          matched.push(c.name)
         }
       }
-      return matched
     },
     pending() {
       return [...pendingSet]

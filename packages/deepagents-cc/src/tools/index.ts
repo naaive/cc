@@ -74,14 +74,18 @@ export {
 export {
   addLineNumbers,
   applyDeterministicEdit,
+  DEFAULT_SKIP_DIRS,
+  enforceBoundary,
   ensureAbsolute,
   isBinaryFile,
   isWithinAllowedRoots,
   makeFileStateCache,
   readTextFile,
+  resolveRoots,
   truncateLine,
   writeTextFile,
   type FileStateCache,
+  type ResolvedRoots,
 } from './fsUtils.js'
 
 // Context-engineering primitives.

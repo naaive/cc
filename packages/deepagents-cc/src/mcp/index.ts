@@ -22,11 +22,16 @@
 import type { StructuredTool } from 'langchain'
 
 /**
- * Re-exported for type-only consumers. The runtime class lives in
- * `@langchain/mcp-adapters`; we keep the package as a peer dep so it
- * doesn't get bundled when MCP is unused.
+ * Structural type for `@langchain/mcp-adapters`'s `MultiServerMCPClient`.
+ *
+ * We don't `import` the real class — that would force every consumer to
+ * install the peer dep. The structural interface gives callers proper
+ * typing on the methods we actually use.
  */
-export type MultiServerMCPClient = unknown
+export interface MultiServerMCPClient {
+  getTools(): Promise<StructuredTool[]>
+  close(): Promise<void>
+}
 
 export interface McpServerConfig {
   /** Transport: "stdio" (default) or "sse". */
@@ -66,11 +71,11 @@ export async function setupMcpServers(
 ): Promise<SetupMcpResult> {
   // Lazy import so the package is optional. Hosts that don't use MCP
   // never pay the import cost or need the dependency installed.
-  const mod = (await import('@langchain/mcp-adapters' as string)) as {
-    MultiServerMCPClient: new (cfg: { mcpServers: Record<string, McpServerConfig> }) => {
-      getTools(): Promise<StructuredTool[]>
-      close(): Promise<void>
-    }
+  // @ts-expect-error optional peer dependency, may not be installed
+  const mod = (await import('@langchain/mcp-adapters')) as {
+    MultiServerMCPClient: new (cfg: {
+      mcpServers: Record<string, McpServerConfig>
+    }) => MultiServerMCPClient
   }
   const client = new mod.MultiServerMCPClient({ mcpServers: servers })
   const tools = await client.getTools()

@@ -46,20 +46,68 @@ export function ensureAbsolute(p: string, label = 'path'): string {
 }
 
 /**
- * Boundary check: is `target` inside `cwd` or any of `additionalDirectories`?
- *
- * cc lets the host whitelist extra directories (e.g. when working across
- * sibling repos in a monorepo, or when scratch files live in /tmp). This
- * helper centralises the check so every fs tool gives the same answer.
+ * Default directories every fs walker / boundary check ignores. Centralised
+ * so glob, grep, and pathRecovery agree on the skip set.
  */
-export function isWithinAllowedRoots(
-  target: string,
+export const DEFAULT_SKIP_DIRS: ReadonlySet<string> = new Set([
+  'node_modules',
+  '.git',
+  '.next',
+  '.turbo',
+  '.cache',
+  '.venv',
+  '__pycache__',
+  'dist',
+  'build',
+  'target',
+  'vendor',
+  'coverage',
+  'out',
+])
+
+/**
+ * Pre-resolved roots for repeated boundary checks.
+ *
+ * cc lets the host whitelist extra directories (sibling repos, scratch
+ * dirs). The check happens on every fs tool call, so we resolve once at
+ * tool construction time rather than per call.
+ */
+export interface ResolvedRoots {
+  /** Original cwd, resolved. */
+  readonly cwd: string
+  /** Resolved + de-duped allowed roots, including cwd. */
+  readonly all: readonly string[]
+}
+
+export function resolveRoots(
   cwd: string,
   additionalDirectories: readonly string[] = [],
+): ResolvedRoots {
+  const seen = new Set<string>()
+  const all: string[] = []
+  for (const r of [cwd, ...additionalDirectories]) {
+    const abs = path.resolve(r)
+    if (!seen.has(abs)) {
+      seen.add(abs)
+      all.push(abs)
+    }
+  }
+  return { cwd: path.resolve(cwd), all }
+}
+
+export function isWithinAllowedRoots(
+  target: string,
+  roots: ResolvedRoots,
 ): boolean {
   const abs = path.resolve(target)
-  const roots = [cwd, ...additionalDirectories].map(r => path.resolve(r))
-  return roots.some(root => abs === root || abs.startsWith(`${root}/`))
+  return roots.all.some(root => abs === root || abs.startsWith(`${root}/`))
+}
+
+export function enforceBoundary(target: string, roots: ResolvedRoots): void {
+  if (isWithinAllowedRoots(target, roots)) return
+  const list =
+    roots.all.length === 1 ? roots.cwd : roots.all.join(', ')
+  throw new Error(`${target} is outside the allowed roots (${list}).`)
 }
 
 /**

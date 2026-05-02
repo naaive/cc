@@ -24,9 +24,10 @@ import { TOOL_DESCRIPTIONS, TOOL_NAMES } from './ccToolNames.js'
 import {
   addLineNumbers,
   DEFAULT_READ_LIMIT,
+  enforceBoundary,
   ensureAbsolute,
-  isWithinAllowedRoots,
   readTextFile,
+  resolveRoots,
   statMtime,
   type FileStateCache,
 } from './fsUtils.js'
@@ -69,12 +70,20 @@ const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp'])
 const PDF_EXT = '.pdf'
 const NOTEBOOK_EXT = '.ipynb'
 
+type MediaHandler = (absPath: string) => unknown
+
 export function createReadTool(options: ReadToolOptions) {
-  const cwd = options.cwd ?? process.cwd()
+  const roots = resolveRoots(
+    options.cwd ?? process.cwd(),
+    options.additionalDirectories ?? [],
+  )
+  const mediaHandlers = new Map<string, MediaHandler>()
+  for (const ext of IMAGE_EXTS) mediaHandlers.set(ext, p => readImageContent(p, ext))
+  mediaHandlers.set(PDF_EXT, readPdfContent)
+  mediaHandlers.set(NOTEBOOK_EXT, readNotebookContent)
 
   return tool(
     (input: z.infer<typeof schema>) => {
-      // Storage-URI fast path.
       const storeId = parseStorageUri(input.file_path)
       if (storeId) {
         if (!options.resultStore) {
@@ -86,26 +95,13 @@ export function createReadTool(options: ReadToolOptions) {
       }
 
       const abs = ensureAbsolute(input.file_path, 'file_path')
+      enforceBoundary(abs, roots)
 
-      // Boundary check.
-      if (!isWithinAllowedRoots(abs, cwd, options.additionalDirectories ?? [])) {
-        throw new Error(
-          `${abs} is outside the allowed roots (cwd=${cwd}${
-            options.additionalDirectories?.length
-              ? `, additional=${options.additionalDirectories.join(',')}`
-              : ''
-          }).`,
-        )
-      }
-
-      // File-unchanged stub (only when no offset/limit).
       const known = options.fileStateCache.get(abs)
       const live = statMtime(abs)
       if (live === undefined) {
-        const hint = pathRecoveryHint(abs, cwd)
-        throw new Error(
-          `file not found: ${abs}${hint ? `\n\n${hint}` : ''}`,
-        )
+        const hint = pathRecoveryHint(abs, roots.cwd)
+        throw new Error(`file not found: ${abs}${hint ? `\n\n${hint}` : ''}`)
       }
       if (
         known !== undefined &&
@@ -116,25 +112,14 @@ export function createReadTool(options: ReadToolOptions) {
         return FILE_UNCHANGED_STUB
       }
 
-      // Media branches.
       const ext = path.extname(abs).toLowerCase()
-      if (IMAGE_EXTS.has(ext)) {
+      const mediaHandler = mediaHandlers.get(ext)
+      if (mediaHandler) {
         options.fileStateCache.set(abs, live)
         options.onFileRead?.(abs)
-        return readImageContent(abs, ext)
-      }
-      if (ext === PDF_EXT) {
-        options.fileStateCache.set(abs, live)
-        options.onFileRead?.(abs)
-        return readPdfContent(abs)
-      }
-      if (ext === NOTEBOOK_EXT) {
-        options.fileStateCache.set(abs, live)
-        options.onFileRead?.(abs)
-        return readNotebookContent(abs)
+        return mediaHandler(abs)
       }
 
-      // Text branch.
       const result = readTextFile(abs, {
         offset: input.offset,
         limit: input.limit,
@@ -155,6 +140,7 @@ export function createReadTool(options: ReadToolOptions) {
     },
   )
 }
+
 
 /**
  * Return image content blocks for the langchain ToolMessage. The Anthropic
@@ -235,12 +221,12 @@ function readNotebookContent(absPath: string): string {
   }
   const sections = nb.cells.map((cell, i) => {
     const id = cell.id ?? `cell-${i}`
-    const src = Array.isArray(cell.source) ? cell.source.join('') : cell.source
+    const src = jupyterSourceToString(cell.source)
     let block = `## ${cell.cell_type} cell ${id}\n${src}`
     if (cell.cell_type === 'code' && cell.outputs && cell.outputs.length > 0) {
       const outs = cell.outputs
         .map(o => {
-          if (o.text) return Array.isArray(o.text) ? o.text.join('') : o.text
+          if (o.text) return jupyterSourceToString(o.text)
           if (o.data && typeof o.data['text/plain'] === 'string') return o.data['text/plain']
           if (o.data) return `[output: ${Object.keys(o.data).join(', ')}]`
           return ''
@@ -251,4 +237,9 @@ function readNotebookContent(absPath: string): string {
     return block
   })
   return sections.join('\n\n')
+}
+
+/** Jupyter cells store source as `string | string[]`. Re-used in NotebookEdit. */
+export function jupyterSourceToString(source: string | string[]): string {
+  return Array.isArray(source) ? source.join('') : source
 }

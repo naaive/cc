@@ -94,7 +94,10 @@ function matchesValue(
 }
 
 function matchesString(pattern: string, value: string): boolean {
-  // Trailing-only `*` is the common case ("git status*"); precompile for speed.
+  // cc-style permission rules treat simple `prefix*` / `*suffix` / literals
+  // as substring matches rather than anchored single-segment globs. This
+  // is what users expect from rules like `Bash command="git status*"` and
+  // `Edit file_path="*.sql"`.
   if (!pattern.includes('?') && !pattern.includes('[') && !pattern.includes('**')) {
     if (pattern.endsWith('*') && !pattern.slice(0, -1).includes('*')) {
       return value.startsWith(pattern.slice(0, -1))

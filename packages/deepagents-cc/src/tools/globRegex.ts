@@ -1,6 +1,6 @@
 /**
- * Glob → regex converter, in its own file so it can be tested without
- * pulling in langchain (which `glob.ts` imports for `tool()`).
+ * Glob → regex converter. Memoised because every fs walker, the permission-
+ * rule evaluator, and the skill activator hit it on every tool call.
  *
  * Supports the patterns we actually use: `**`, `*`, `?`, `[abc]`.
  *  - `**` matches any depth.
@@ -8,7 +8,18 @@
  *  - `?`  matches a single non-`/` char.
  *  - `[abc]` and `[a-z]` character classes pass through verbatim.
  */
+
+const cache = new Map<string, RegExp>()
+
 export function globToRegex(pattern: string): RegExp {
+  const cached = cache.get(pattern)
+  if (cached) return cached
+  const re = compile(pattern)
+  cache.set(pattern, re)
+  return re
+}
+
+function compile(pattern: string): RegExp {
   let i = 0
   let out = ''
   while (i < pattern.length) {

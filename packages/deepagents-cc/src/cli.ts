@@ -81,9 +81,27 @@ async function main() {
     flags.prompt = await readStdin()
   }
 
-  const { agent } = createClaudeCodeAgent({
+  const { agent, shell, jobRegistry } = createClaudeCodeAgent({
     cwd: flags.cwd,
     model: flags.model,
+  })
+
+  const shutdown = () => {
+    try {
+      shell.stop()
+    } catch {
+      // ignore
+    }
+    try {
+      jobRegistry.stopAll()
+    } catch {
+      // ignore
+    }
+  }
+  process.on('exit', shutdown)
+  process.on('SIGINT', () => {
+    shutdown()
+    process.exit(130)
   })
 
   if (flags.headless) {

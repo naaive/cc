@@ -14,6 +14,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { tool } from 'langchain'
 import { z } from 'zod/v4'
+import { TOOL_DESCRIPTIONS, TOOL_NAMES } from './ccToolNames.js'
 import { ensureAbsolute } from './fsUtils.js'
 import { globToRegex } from './globRegex.js'
 
@@ -75,7 +76,11 @@ export function createGlobTool(options: GlobToolOptions = {}) {
         matches.length > limit ? `\n\n[showed ${limit} of ${matches.length}+ matches]` : ''
       return top.map(x => x.p).join('\n') + tail
     },
-    { name: 'glob', description, schema },
+    {
+      name: TOOL_NAMES.Glob,
+      description: TOOL_DESCRIPTIONS.Glob,
+      schema,
+    },
   )
 }
 

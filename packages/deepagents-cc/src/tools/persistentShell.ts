@@ -1,6 +1,8 @@
 /**
  * Persistent shell — keeps `cwd`, env, and shell variables alive across
- * bash tool calls.
+ * Bash tool calls. Plus a registry that backs the cc-style BashOutput /
+ * KillShell tools by tracking detached background jobs spawned with
+ * `run_in_background`.
  *
  * cc's BashTool runs against a long-lived shell so `cd foo && pwd` and a
  * later `pwd` agree. The naive "spawn /bin/sh -c <cmd>" approach loses
@@ -8,16 +10,18 @@
  * stdin, terminated by a sentinel, then read stdout/stderr until the
  * sentinel fires.
  *
- * Trade-offs:
- *  - Output is captured by sentinel framing, not pipe close — the shell
- *    doesn't restart between commands.
- *  - We capture stdout and stderr separately by binding stderr through a
- *    second sentinel echoed in the same script.
- *  - Background jobs (`&`) keep running but we don't track them; the model
- *    can use `jobs`/`wait` if needed.
+ * Background jobs are kept in a separate map: each one is a fresh
+ * non-persistent child whose stdout/stderr we accumulate. BashOutput
+ * returns *new* output since the last poll; KillShell SIGTERMs the
+ * process. This mirrors cc's contract for the model so it can fire-
+ * and-poll long-running commands.
  */
 
-import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process'
+import {
+  type ChildProcess,
+  type ChildProcessWithoutNullStreams,
+  spawn,
+} from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 
@@ -177,4 +181,136 @@ function appendCapped(current: string, chunk: string, onTruncate: () => void): s
     return current + chunk.slice(0, remaining)
   }
   return current + chunk
+}
+
+/**
+ * Background-job registry. Each entry is a detached child process plus a
+ * monotonically-growing buffer of its stdout/stderr. BashOutput hands the
+ * model "what's new since last poll" by tracking a per-poll cursor; a
+ * fresh BashOutput call advances the cursor.
+ */
+export interface BackgroundJob {
+  id: string
+  command: string
+  startedAt: number
+  status: 'running' | 'exited' | 'killed'
+  exitCode: number | null
+  /** Full stdout captured so far (capped at MAX_OUTPUT_BYTES). */
+  stdout: string
+  /** Full stderr captured so far (capped at MAX_OUTPUT_BYTES). */
+  stderr: string
+}
+
+export class BackgroundJobRegistry {
+  private readonly jobs = new Map<string, BackgroundJob>()
+  private readonly children = new Map<string, ChildProcess>()
+  /** Per-job cursor pointing to "next byte the model hasn't seen". */
+  private readonly stdoutCursors = new Map<string, number>()
+  private readonly stderrCursors = new Map<string, number>()
+
+  spawn(
+    command: string,
+    cwd: string,
+    env: NodeJS.ProcessEnv,
+  ): BackgroundJob {
+    const id = `bg_${randomUUID().slice(0, 8)}`
+    const child = spawn('/bin/bash', ['--noprofile', '--norc', '-c', command], {
+      cwd,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true,
+    })
+    child.unref()
+
+    const job: BackgroundJob = {
+      id,
+      command,
+      startedAt: Date.now(),
+      status: 'running',
+      exitCode: null,
+      stdout: '',
+      stderr: '',
+    }
+    this.jobs.set(id, job)
+    this.children.set(id, child)
+    this.stdoutCursors.set(id, 0)
+    this.stderrCursors.set(id, 0)
+
+    let truncated = false
+    child.stdout?.on('data', (chunk: Buffer) => {
+      job.stdout = appendCapped(job.stdout, chunk.toString('utf8'), () => {
+        truncated = true
+      })
+    })
+    child.stderr?.on('data', (chunk: Buffer) => {
+      job.stderr = appendCapped(job.stderr, chunk.toString('utf8'), () => {
+        truncated = true
+      })
+    })
+    child.on('exit', code => {
+      job.status = job.status === 'killed' ? 'killed' : 'exited'
+      job.exitCode = code
+      if (truncated) job.stdout += '\n[truncated]'
+    })
+    return job
+  }
+
+  poll(id: string): {
+    job: BackgroundJob
+    newStdout: string
+    newStderr: string
+  } | null {
+    const job = this.jobs.get(id)
+    if (!job) return null
+    const sCur = this.stdoutCursors.get(id) ?? 0
+    const eCur = this.stderrCursors.get(id) ?? 0
+    const newStdout = job.stdout.slice(sCur)
+    const newStderr = job.stderr.slice(eCur)
+    this.stdoutCursors.set(id, job.stdout.length)
+    this.stderrCursors.set(id, job.stderr.length)
+    return { job, newStdout, newStderr }
+  }
+
+  kill(id: string): boolean {
+    const child = this.children.get(id)
+    const job = this.jobs.get(id)
+    if (!child || !job) return false
+    if (job.status !== 'running') return false
+    try {
+      child.kill('SIGTERM')
+      job.status = 'killed'
+      // Hard-kill if the child ignores SIGTERM.
+      setTimeout(() => {
+        if (job.status === 'killed' && child.exitCode == null) {
+          try {
+            child.kill('SIGKILL')
+          } catch {
+            /* ignore */
+          }
+        }
+      }, 2000).unref()
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  list(): BackgroundJob[] {
+    return [...this.jobs.values()]
+  }
+
+  /** Tear down everything — used at shutdown. */
+  stopAll(): void {
+    for (const [, child] of this.children) {
+      try {
+        child.kill('SIGKILL')
+      } catch {
+        /* ignore */
+      }
+    }
+    this.children.clear()
+    this.jobs.clear()
+    this.stdoutCursors.clear()
+    this.stderrCursors.clear()
+  }
 }

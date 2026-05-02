@@ -1,12 +1,23 @@
 /**
- * Permission mode — the four cc modes plus the read/write classifier.
+ * Permission mode — cc's four modes plus the read/write tool classifier.
  *
  * `default` — every tool runs unless an explicit deny rule matches.
- * `acceptEdits` — auto-approve writes; still gate destructive ops.
- * `plan` — read-only; block any tool that mutates state.
- * `bypassPermissions` — skip every check (dangerous; only honored
- *   when the host process opts in via env / settings).
+ * `acceptEdits` — auto-approve writes; differs from default only in how the
+ *   host UI prompts the user.
+ * `plan` — read-only; block any tool that mutates state. The model can
+ *   leave plan mode by calling ExitPlanMode (after the user approves).
+ * `bypassPermissions` — skip every check (only honored when the host
+ *   process opts in via env / settings).
+ *
+ * The read/write classification mirrors cc's, sourced from
+ * `tools/ccToolNames.ts` so the surface is single-source-of-truth.
  */
+
+import {
+  CC_READ_ONLY_TOOLS,
+  CC_WRITE_TOOLS,
+  TOOL_NAMES,
+} from './tools/ccToolNames.js'
 
 export const PERMISSION_MODES = [
   'default',
@@ -17,31 +28,8 @@ export const PERMISSION_MODES = [
 
 export type PermissionMode = (typeof PERMISSION_MODES)[number]
 
-/**
- * Tool names known to mutate state. Anything not in this set is treated
- * as read-only by the plan-mode gate. User-defined tools default to
- * "unknown" and the middleware errs on the side of caution: if the tool
- * is unrecognized in plan mode, deny it.
- */
-export const WRITE_TOOL_NAMES: ReadonlySet<string> = new Set([
-  'write_file',
-  'edit_file',
-  'bash',
-  'exit_plan_mode',
-])
-
-export const READ_TOOL_NAMES: ReadonlySet<string> = new Set([
-  'read_file',
-  'ls',
-  'glob',
-  'grep',
-  'web_fetch',
-  'web_search',
-  'enter_plan_mode',
-  'ask_user_question',
-  'task', // sub-agent calls inherit their own permission mode
-  'write_todos', // toggling todos is metadata; harmless in plan mode
-])
+export const WRITE_TOOL_NAMES: ReadonlySet<string> = CC_WRITE_TOOLS
+export const READ_TOOL_NAMES: ReadonlySet<string> = CC_READ_ONLY_TOOLS
 
 export interface PermissionDecision {
   allowed: boolean
@@ -71,17 +59,10 @@ export function decide(
     if (isReadOnly) return { allowed: true }
     return {
       allowed: false,
-      reason: `Plan mode is active. ${toolName} mutates state and is blocked. Call exit_plan_mode once the user has approved the plan.`,
+      reason: `Plan mode is active. ${toolName} mutates state and is blocked. Call ${TOOL_NAMES.ExitPlanMode} once the user has approved the plan.`,
     }
   }
 
-  if (mode === 'acceptEdits') {
-    // Same as default for blocking purposes — modes diverge only in how the
-    // host UI prompts the user. The middleware never blocks here; an outer
-    // hook layer can audit-log if desired.
-    return { allowed: true }
-  }
-
-  // default
+  // default / acceptEdits never block here — the host UI may still prompt.
   return { allowed: true }
 }

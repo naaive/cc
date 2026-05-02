@@ -9,6 +9,7 @@
 
 import { tool } from 'langchain'
 import { z } from 'zod/v4'
+import { TOOL_DESCRIPTIONS, TOOL_NAMES } from './ccToolNames.js'
 
 export interface WebSearchHit {
   title: string
@@ -29,10 +30,6 @@ const schema = z.object({
     .describe('Maximum number of results to return (default 5).'),
 })
 
-const description = `Search the web and return ranked results.
-
-Returns a list of {title, url, snippet} entries. Use web_fetch to download a specific result.`
-
 export function createWebSearchTool(searchImpl: WebSearchImpl) {
   return tool(
     async (input: z.infer<typeof schema>) => {
@@ -47,6 +44,10 @@ export function createWebSearchTool(searchImpl: WebSearchImpl) {
         return `search failed: ${(err as Error).message}`
       }
     },
-    { name: 'web_search', description, schema },
+    {
+      name: TOOL_NAMES.WebSearch,
+      description: TOOL_DESCRIPTIONS.WebSearch,
+      schema,
+    },
   )
 }

@@ -1,10 +1,14 @@
 /**
- * read_file — cc-style. Real disk, line-numbered output, offset+limit paging,
- * binary-file refusal, mtime-tracked for the stale-edit guard in edit_file.
+ * Read tool — cc-aligned name and description.
+ *
+ * Reads from real disk, returns `cat -n`-style numbered output, supports
+ * offset/limit paging, refuses binary files, and tracks mtime for the
+ * stale-edit guard in the Edit tool.
  */
 
 import { tool } from 'langchain'
 import { z } from 'zod/v4'
+import { TOOL_DESCRIPTIONS, TOOL_NAMES } from './ccToolNames.js'
 import {
   addLineNumbers,
   DEFAULT_READ_LIMIT,
@@ -20,7 +24,7 @@ const schema = z.object({
     .int()
     .nonnegative()
     .optional()
-    .describe('Zero-based line offset. Use with `limit` to page through large files.'),
+    .describe('Zero-based line offset for paging through long files.'),
   limit: z
     .number()
     .int()
@@ -29,19 +33,11 @@ const schema = z.object({
     .describe(`Max lines to return (default ${DEFAULT_READ_LIMIT}).`),
 })
 
-const description = `Read a file from disk and return its content with line numbers.
-
-Notes:
- - file_path must be ABSOLUTE.
- - Output is formatted like \`cat -n\`: \`<line_no>\\t<content>\`.
- - Long lines are truncated to 2000 chars; large files are paginated via offset+limit.
- - Binary files (NUL byte detected in first 8KB) are refused.`
-
-export interface ReadFileToolOptions {
+export interface ReadToolOptions {
   fileStateCache: FileStateCache
 }
 
-export function createReadFileTool(options: ReadFileToolOptions) {
+export function createReadTool(options: ReadToolOptions) {
   return tool(
     (input: z.infer<typeof schema>) => {
       const abs = ensureAbsolute(input.file_path, 'file_path')
@@ -57,6 +53,10 @@ export function createReadFileTool(options: ReadFileToolOptions) {
         : ''
       return `${numbered}${tail}`
     },
-    { name: 'read_file', description, schema },
+    {
+      name: TOOL_NAMES.Read,
+      description: TOOL_DESCRIPTIONS.Read,
+      schema,
+    },
   )
 }

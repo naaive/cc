@@ -1,26 +1,30 @@
 /**
- * createClaudeCodeAgent — assemble the full Claude Code agent on top of
- * `langchain.createAgent` directly (no deepagents wrapper).
+ * createClaudeCodeAgent — wire the cc-aligned tool set, system prompt, and
+ * middleware chain on top of `langchain.createAgent`.
  *
- * Why no deepagents:
- *  - Its filesystem tools live in agent state, not on real disk. cc edits
- *    real files; that's what makes the harness useful.
- *  - Its bash tool is a one-shot spawn — `cd` doesn't persist across
- *    calls. cc keeps a long-lived shell.
- *  - Its grep is regex-against-state-files; we want a ripgrep wrapper.
- *  - We need plan-mode, hooks, system reminders, settings, and CLAUDE.md
- *    injection regardless. That's most of the work; deepagents was only
- *    saving us a few hundred lines of glue.
+ * Tool names are now PascalCase to match cc:
+ *   Bash / BashOutput / KillShell / Read / Write / Edit / NotebookEdit /
+ *   Glob / Grep / TodoWrite / Agent / WebFetch / WebSearch /
+ *   AskUserQuestion / ExitPlanMode.
  *
- * The result is a normal langchain `createAgent` graph: streaming,
- * checkpointers, Studio all work.
+ * Middleware order (deliberate):
+ *   1. Hooks                       — must fire first (SessionStart)
+ *   2. PermissionMode              — gate writes before any tool runs
+ *   3. ContextEngineering          — re-inject todo state, plan banner
+ *   4. Summarization               — token-budget compaction
+ *   5. PromptCache                 — attach cache_control markers last
+ *   6. langchain anthropicPromptCachingMiddleware (when on Claude)
  */
 
-import { createAgent, type AgentMiddleware } from 'langchain'
+import {
+  anthropicPromptCachingMiddleware,
+  createAgent,
+  type AgentMiddleware,
+} from 'langchain'
 import type {
-  StructuredTool,
   ClientTool,
   ServerTool,
+  StructuredTool,
 } from '@langchain/core/tools'
 import type { LanguageModelLike } from '@langchain/core/language_models/base'
 
@@ -29,35 +33,39 @@ import { loadClaudeMd } from './claudemd.js'
 import { buildSystemPrompt } from './prompt.js'
 import { loadSettings, type Settings } from './settings.js'
 import {
-  CC_TOOL_NAMES,
+  ALL_CC_TOOL_NAMES,
+  BackgroundJobRegistry,
+  createAgentTool,
   createAskUserQuestionTool,
-  createBashTool,
-  createEditFileTool,
-  createEnterPlanModeTool,
+  createBashTools,
+  createEditTool,
   createExitPlanModeTool,
   createGlobTool,
   createGrepTool,
-  createLsTool,
-  createReadFileTool,
-  createTaskTool,
+  createNotebookEditTool,
+  createReadTool,
+  createTodoWriteTool,
   createWebFetchTool,
   createWebSearchTool,
-  createWriteFileTool,
-  createWriteTodosTool,
+  createWriteTool,
   makeFileStateCache,
   PersistentShell,
+  TOOL_NAMES,
   type AskUserQuestionResponder,
   type FileStateCache,
   type SubAgent,
+  type ToolName,
   type WebSearchImpl,
 } from './tools/index.js'
 import {
+  ccReminders,
+  createContextEngineeringMiddleware,
   createHooksMiddleware,
   createPermissionModeMiddleware,
+  createPromptCacheMiddleware,
   createSummarizationMiddleware,
-  createSystemReminderMiddleware,
-  stockReminders,
   type HookConfig,
+  type PromptCacheMiddlewareOptions,
   type Reminder,
   type SummarizationMiddlewareOptions,
 } from './middleware/index.js'
@@ -68,47 +76,37 @@ export interface CreateClaudeCodeAgentParams {
   model?: string | LanguageModelLike
   /** User-supplied tools. Names must not collide with cc built-ins. */
   tools?: Array<StructuredTool | ClientTool | ServerTool>
-  /** Sub-agents available via the `task` tool. */
+  /** Sub-agents available via the Agent tool. */
   subagents?: SubAgent[]
-  /** Override the cwd used for env detection / fs root / shell startup dir. */
   cwd?: string
-  /** Override the auto-loaded settings (useful for tests). */
   settings?: Settings
-  /** Skip CLAUDE.md auto-load. */
   skipClaudeMd?: boolean
-  /** Initial permission mode. Overrides settings.permissionMode. */
   initialPermissionMode?: PermissionMode
-  /** Plug in a real web search backend. Off by default. */
   webSearch?: WebSearchImpl
-  /** Override the AskUserQuestion responder (default: stdin readline). */
   askUserQuestion?: AskUserQuestionResponder
-  /** Hooks merged on top of settings.hooks. */
   hooks?: HookConfig
-  /** Extra system reminders. */
+  /** Extra reminders appended after the default cc set. */
   reminders?: Reminder[]
-  /** Free-form system prompt appendix. */
   systemPromptAppendix?: string
+  /** Use the Agent SDK identity prefix instead of the default cc one. */
+  agentSdk?: boolean
   /** Disable specific cc tools by name. */
-  disable?: ReadonlyArray<(typeof CC_TOOL_NAMES)[number]>
-  /** Inject the FileStateCache (test seam; defaults to a fresh one). */
+  disable?: ReadonlyArray<ToolName>
   fileStateCache?: FileStateCache
-  /** Inject the persistent shell (test seam; defaults to a fresh one). */
   shell?: PersistentShell
-  /** Override summarization defaults. Pass `false` to disable entirely. */
+  jobRegistry?: BackgroundJobRegistry
   summarization?: SummarizationMiddlewareOptions | false
+  promptCache?: PromptCacheMiddlewareOptions | false
 }
 
 export interface ClaudeCodeAgentBundle {
-  /** The compiled langchain agent (LangGraph). */
   agent: ReturnType<typeof createAgent>
-  /** Resolved settings used to construct the agent. */
   settings: Settings
-  /** Environment snapshot baked into the system prompt. */
   env: EnvironmentInfo
   /** Tool names actually wired into the agent. */
   toolNames: string[]
-  /** Underlying persistent shell (so the host can stop it on shutdown). */
   shell: PersistentShell
+  jobRegistry: BackgroundJobRegistry
 }
 
 export function createClaudeCodeAgent(
@@ -129,70 +127,74 @@ export function createClaudeCodeAgent(
     env,
     claudeMd,
     appendix: params.systemPromptAppendix,
+    agentSdk: params.agentSdk,
   })
 
   const fileStateCache = params.fileStateCache ?? makeFileStateCache()
   const shell = params.shell ?? new PersistentShell({ cwd })
+  const jobRegistry = params.jobRegistry ?? new BackgroundJobRegistry()
 
-  // Build the tool set, honoring the disable list and settings allow/deny.
-  const disabled = new Set<string>(params.disable ?? [])
+  const disabled = new Set<ToolName>(params.disable ?? [])
   const allowed = settings.allowedTools ? new Set(settings.allowedTools) : null
   const denied = new Set(settings.deniedTools ?? [])
-  const isEnabled = (name: string) =>
+  const isEnabled = (name: ToolName) =>
     !disabled.has(name) && !denied.has(name) && (!allowed || allowed.has(name))
 
   const ccTools: StructuredTool[] = []
 
-  if (isEnabled('bash'))
-    ccTools.push(
-      createBashTool({
-        cwd,
-        denyPatterns: settings.bashDeny,
-        allowPatterns: settings.bashAllow,
-        shellInstance: shell,
-      }),
-    )
-  if (isEnabled('read_file')) ccTools.push(createReadFileTool({ fileStateCache }))
-  if (isEnabled('write_file')) ccTools.push(createWriteFileTool({ fileStateCache }))
-  if (isEnabled('edit_file')) ccTools.push(createEditFileTool({ fileStateCache }))
-  if (isEnabled('ls')) ccTools.push(createLsTool({ rootBoundary: cwd }))
-  if (isEnabled('glob')) ccTools.push(createGlobTool({ cwd }))
-  if (isEnabled('grep')) ccTools.push(createGrepTool({ cwd }))
-  if (isEnabled('write_todos')) ccTools.push(createWriteTodosTool())
+  // Bash + bg jobs share state.
+  if (isEnabled(TOOL_NAMES.Bash)) {
+    const bundle = createBashTools({
+      cwd,
+      denyPatterns: settings.bashDeny,
+      allowPatterns: settings.bashAllow,
+      shellInstance: shell,
+      jobRegistry,
+    })
+    ccTools.push(bundle.bash as StructuredTool)
+    if (isEnabled(TOOL_NAMES.BashOutput)) ccTools.push(bundle.bashOutput as StructuredTool)
+    if (isEnabled(TOOL_NAMES.KillShell)) ccTools.push(bundle.killShell as StructuredTool)
+  }
 
-  if (isEnabled('web_fetch'))
+  if (isEnabled(TOOL_NAMES.Read)) ccTools.push(createReadTool({ fileStateCache }))
+  if (isEnabled(TOOL_NAMES.Write)) ccTools.push(createWriteTool({ fileStateCache }))
+  if (isEnabled(TOOL_NAMES.Edit)) ccTools.push(createEditTool({ fileStateCache }))
+  if (isEnabled(TOOL_NAMES.NotebookEdit)) ccTools.push(createNotebookEditTool())
+  if (isEnabled(TOOL_NAMES.Glob)) ccTools.push(createGlobTool({ cwd }))
+  if (isEnabled(TOOL_NAMES.Grep)) ccTools.push(createGrepTool({ cwd }))
+  if (isEnabled(TOOL_NAMES.TodoWrite)) ccTools.push(createTodoWriteTool())
+
+  if (isEnabled(TOOL_NAMES.WebFetch))
     ccTools.push(createWebFetchTool({ allowHosts: settings.webFetchAllowHosts }))
-  if (isEnabled('web_search') && params.webSearch)
+  if (isEnabled(TOOL_NAMES.WebSearch) && params.webSearch)
     ccTools.push(createWebSearchTool(params.webSearch))
-  if (isEnabled('enter_plan_mode')) ccTools.push(createEnterPlanModeTool())
-  if (isEnabled('exit_plan_mode')) ccTools.push(createExitPlanModeTool())
-  if (isEnabled('ask_user_question'))
+  if (isEnabled(TOOL_NAMES.AskUserQuestion))
     ccTools.push(createAskUserQuestionTool(params.askUserQuestion))
+  if (isEnabled(TOOL_NAMES.ExitPlanMode)) ccTools.push(createExitPlanModeTool())
 
-  // task / subagents
-  if (params.subagents && params.subagents.length > 0 && isEnabled('task')) {
+  // Agent (sub-agent) tool — only wired when sub-agents are configured.
+  if (
+    params.subagents &&
+    params.subagents.length > 0 &&
+    isEnabled(TOOL_NAMES.Agent)
+  ) {
     ccTools.push(
-      createTaskTool({
+      createAgentTool({
         subagents: params.subagents,
-        // Each task call gets a NEW agent — shared shell + cache so the
-        // sub-agent doesn't lose disk state, but its own message list.
         factory: sub => {
           const subBundle = createClaudeCodeAgent({
             ...params,
             cwd,
-            // No further sub-agents from a sub-agent (avoid runaway recursion).
-            subagents: [],
-            // Inherit shell + cache so file-edit guards stay coherent.
+            subagents: [], // no recursion
             fileStateCache,
             shell,
-            // Sub-agent uses its own model if specified.
+            jobRegistry,
             model: sub.model ?? params.model,
             systemPromptAppendix: sub.systemPrompt,
-            // Apply tool whitelist if any.
             disable: sub.toolWhitelist
-              ? (CC_TOOL_NAMES.filter(
+              ? (ALL_CC_TOOL_NAMES.filter(
                   n => !sub.toolWhitelist!.includes(n),
-                ) as (typeof CC_TOOL_NAMES)[number][])
+                ) as ToolName[])
               : params.disable,
           })
           return subBundle.agent as unknown as {
@@ -214,7 +216,7 @@ export function createClaudeCodeAgent(
     )
   }
 
-  // Assemble middleware chain.
+  // Middleware chain — order matters (see header).
   const middleware: AgentMiddleware[] = []
 
   if (settings.hooks || params.hooks) {
@@ -234,20 +236,33 @@ export function createClaudeCodeAgent(
   )
 
   middleware.push(
-    createSystemReminderMiddleware({
+    createContextEngineeringMiddleware({
       reminders: [
-        stockReminders.todoStale(),
-        stockReminders.planModeActive(() => 'plan'),
+        ccReminders.todoState(),
+        ccReminders.todoStaleNudge(),
+        ccReminders.planModeActive(),
         ...(params.reminders ?? []),
       ],
     }),
   )
 
   if (params.summarization !== false) {
+    middleware.push(createSummarizationMiddleware(params.summarization ?? {}))
+  }
+
+  if (params.promptCache !== false) {
+    middleware.push(createPromptCacheMiddleware(params.promptCache ?? {}))
+  }
+
+  // langchain's built-in anthropic prompt-cache middleware handles the
+  // conversation-side markers (last 1-2 user messages). We pair it with
+  // ours which handles the system prompt + anchor.
+  if (isAnthropicModel(params.model ?? modelId)) {
     middleware.push(
-      createSummarizationMiddleware(
-        params.summarization ?? {},
-      ),
+      anthropicPromptCachingMiddleware({
+        unsupportedModelBehavior: 'ignore',
+        minMessagesToCache: 1,
+      }),
     )
   }
 
@@ -264,6 +279,7 @@ export function createClaudeCodeAgent(
     env,
     toolNames: [...ccTools.map(t => t.name), ...userTools.map(t => t.name)],
     shell,
+    jobRegistry,
   }
 }
 
@@ -286,4 +302,22 @@ function mergeHookConfigs(
     if (merged.length > 0) out[e] = merged
   }
   return out
+}
+
+function isAnthropicModel(model: string | LanguageModelLike): boolean {
+  if (typeof model === 'string') {
+    if (model.includes(':')) return model.split(':')[0] === 'anthropic'
+    return model.startsWith('claude')
+  }
+  // LanguageModelLike — best-effort name probe.
+  const m = model as { getName?: () => string }
+  if (typeof m.getName !== 'function') return false
+  const name = m.getName()
+  if (name === 'ChatAnthropic') return true
+  if (name === 'ConfigurableModel') {
+    const cfg = (model as { _defaultConfig?: { modelProvider?: string } })
+      ._defaultConfig
+    return cfg?.modelProvider === 'anthropic'
+  }
+  return false
 }

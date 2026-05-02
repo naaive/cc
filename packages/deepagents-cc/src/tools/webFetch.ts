@@ -10,6 +10,7 @@
 
 import { tool } from 'langchain'
 import { z } from 'zod/v4'
+import { TOOL_DESCRIPTIONS, TOOL_NAMES } from './ccToolNames.js'
 import { htmlToText } from './htmlToText.js'
 
 export { htmlToText }
@@ -22,17 +23,9 @@ const schema = z.object({
   url: z.string().url().describe('URL to fetch. Must be http(s).'),
   prompt: z
     .string()
-    .optional()
-    .describe(
-      'Optional follow-up question for the model after the page text is loaded. Returned alongside content for context.',
-    ),
+    .min(1)
+    .describe('Specific question / extraction goal for this page.'),
 })
-
-const description = `Fetch a URL and return its main text content.
-
-- Only http and https URLs are supported.
-- HTML is stripped to plain text; long content is truncated.
-- Use this for documentation pages, READMEs, blog posts. For dynamic web apps, prefer a real browser.`
 
 export interface WebFetchOptions {
   /** Override the global fetch (useful for tests / proxies). */
@@ -66,7 +59,7 @@ export function createWebFetchTool(options: WebFetchOptions = {}) {
       try {
         const res = await fetchImpl(input.url, {
           signal: controller.signal,
-          headers: { 'user-agent': 'deepagents-cc/0.1 (+claude-code)' },
+          headers: { 'user-agent': 'cc-on-langchain/0.1 (+claude-code)' },
           redirect: 'follow',
         })
         if (!res.ok) {
@@ -100,7 +93,11 @@ export function createWebFetchTool(options: WebFetchOptions = {}) {
         clearTimeout(timer)
       }
     },
-    { name: 'web_fetch', description, schema },
+    {
+      name: TOOL_NAMES.WebFetch,
+      description: TOOL_DESCRIPTIONS.WebFetch,
+      schema,
+    },
   )
 }
 

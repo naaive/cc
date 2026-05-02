@@ -16,6 +16,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { tool } from 'langchain'
 import { z } from 'zod/v4'
+import { TOOL_DESCRIPTIONS, TOOL_NAMES } from './ccToolNames.js'
 import { ensureAbsolute, isBinaryFile, truncateLine } from './fsUtils.js'
 
 const SKIP_DIRS = new Set([
@@ -31,7 +32,7 @@ const SKIP_DIRS = new Set([
 ])
 
 const schema = z.object({
-  pattern: z.string().describe('Regex pattern. JavaScript-style — use \\\\ to escape backslashes in JSON.'),
+  pattern: z.string().describe('Regex pattern (ripgrep syntax). JavaScript-style; use \\\\ to escape backslashes in JSON.'),
   path: z
     .string()
     .optional()
@@ -41,15 +42,15 @@ const schema = z.object({
     .optional()
     .describe('Optional glob filter on file path, e.g. "**/*.ts".'),
   output_mode: z
-    .enum(['files', 'matches'])
+    .enum(['content', 'files_with_matches', 'count'])
     .optional()
-    .describe('"files" returns matched paths; "matches" returns path:line:content. Default "files".'),
-  case_insensitive: z.boolean().optional().describe('Case-insensitive search.'),
+    .describe('"content" shows matching lines, "files_with_matches" shows paths only (default), "count" shows match counts.'),
+  '-i': z.boolean().optional().describe('Case-insensitive search.'),
   multiline: z
     .boolean()
     .optional()
-    .describe('Allow . to match newlines. Forces fallback walker (rg has its own multiline mode).'),
-  limit: z
+    .describe('Allow . to match newlines. Use for cross-line patterns.'),
+  head_limit: z
     .number()
     .int()
     .positive()
@@ -57,11 +58,6 @@ const schema = z.object({
     .optional()
     .describe('Max lines/files in the result (default 200).'),
 })
-
-const description = `Search file contents with a regex.
-
-Uses ripgrep when installed, falls back to a pure-Node walker otherwise.
-For finding filenames, use glob instead.`
 
 export interface GrepToolOptions {
   cwd?: string
@@ -73,8 +69,8 @@ export function createGrepTool(options: GrepToolOptions = {}) {
   return tool(
     (input: z.infer<typeof schema>) => {
       const root = ensureAbsolute(input.path ?? options.cwd ?? process.cwd(), 'path')
-      const limit = input.limit ?? 200
-      const mode = input.output_mode ?? 'files'
+      const limit = input.head_limit ?? 200
+      const mode = input.output_mode ?? 'files_with_matches'
 
       if (!options.forceFallback && !input.multiline && hasRipgrep()) {
         const out = runRipgrep(root, input, mode, limit)
@@ -82,7 +78,11 @@ export function createGrepTool(options: GrepToolOptions = {}) {
       }
       return walkFallback(root, input, mode, limit)
     },
-    { name: 'grep', description, schema },
+    {
+      name: TOOL_NAMES.Grep,
+      description: TOOL_DESCRIPTIONS.Grep,
+      schema,
+    },
   )
 }
 
@@ -98,21 +98,23 @@ function hasRipgrep(): boolean {
   return _ripgrepCached
 }
 
+type GrepMode = 'content' | 'files_with_matches' | 'count'
+
 function runRipgrep(
   root: string,
   input: z.infer<typeof schema>,
-  mode: 'files' | 'matches',
+  mode: GrepMode,
   limit: number,
 ): string | null {
   const args: string[] = ['--no-config']
-  if (input.case_insensitive) args.push('-i')
-  if (mode === 'files') args.push('-l')
+  if (input['-i']) args.push('-i')
+  if (mode === 'files_with_matches') args.push('-l')
+  else if (mode === 'count') args.push('-c')
   else args.push('-n')
   if (input.glob) args.push('-g', input.glob)
   args.push('--', input.pattern, root)
   const res = spawnSync('rg', args, { encoding: 'utf8' })
   if (res.error) return null
-  // rg exit codes: 0 = matches, 1 = no matches, 2 = error
   if (res.status === 1) return `(no matches for /${input.pattern}/ in ${root})`
   if (res.status !== 0) return null
   const lines = (res.stdout ?? '').split('\n').filter(Boolean)
@@ -125,10 +127,10 @@ function runRipgrep(
 function walkFallback(
   root: string,
   input: z.infer<typeof schema>,
-  mode: 'files' | 'matches',
+  mode: GrepMode,
   limit: number,
 ): string {
-  const flags = `${input.case_insensitive ? 'i' : ''}${input.multiline ? 's' : ''}`
+  const flags = `${input['-i'] ? 'i' : ''}${input.multiline ? 's' : ''}`
   let re: RegExp
   try {
     re = new RegExp(input.pattern, flags)
@@ -138,6 +140,7 @@ function walkFallback(
   const filterRe = input.glob ? globFilterToRegex(input.glob) : null
   const matchedFiles: string[] = []
   const matchedLines: string[] = []
+  const counts = new Map<string, number>()
 
   const visit = (dir: string) => {
     if (matchedLines.length >= limit && matchedFiles.length >= limit) return
@@ -165,26 +168,33 @@ function walkFallback(
         if (input.multiline) {
           if (re.test(content)) {
             matchedFiles.push(full)
-            if (mode === 'matches') matchedLines.push(`${full}: <multiline match>`)
+            if (mode === 'content') matchedLines.push(`${full}: <multiline match>`)
+            else if (mode === 'count') counts.set(full, (counts.get(full) ?? 0) + 1)
           }
         } else {
           const lines = content.split('\n')
           let fileMatched = false
+          let fileCount = 0
           for (let i = 0; i < lines.length; i++) {
             re.lastIndex = 0
             if (re.test(lines[i]!)) {
               fileMatched = true
-              if (mode === 'matches') {
+              fileCount++
+              if (mode === 'content') {
                 matchedLines.push(`${full}:${i + 1}:${truncateLine(lines[i]!)}`)
                 if (matchedLines.length >= limit) return
-              } else {
+              } else if (mode === 'files_with_matches') {
                 break
               }
             }
           }
-          if (fileMatched && mode === 'files') {
-            matchedFiles.push(full)
-            if (matchedFiles.length >= limit) return
+          if (fileMatched) {
+            if (mode === 'files_with_matches') {
+              matchedFiles.push(full)
+              if (matchedFiles.length >= limit) return
+            } else if (mode === 'count') {
+              counts.set(full, fileCount)
+            }
           }
         }
       }
@@ -193,9 +203,13 @@ function walkFallback(
 
   visit(root)
 
-  if (mode === 'files') {
+  if (mode === 'files_with_matches') {
     if (matchedFiles.length === 0) return `(no matches for /${input.pattern}/ in ${root})`
     return matchedFiles.join('\n')
+  }
+  if (mode === 'count') {
+    if (counts.size === 0) return `(no matches for /${input.pattern}/ in ${root})`
+    return [...counts.entries()].map(([f, n]) => `${f}:${n}`).join('\n')
   }
   if (matchedLines.length === 0) return `(no matches for /${input.pattern}/ in ${root})`
   return matchedLines.join('\n')

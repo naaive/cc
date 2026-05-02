@@ -11,6 +11,7 @@
 import { tool } from 'langchain'
 import { z } from 'zod/v4'
 import { createInterface } from 'node:readline'
+import { TOOL_DESCRIPTIONS, TOOL_NAMES } from './ccToolNames.js'
 
 export interface QuestionOption {
   label: string
@@ -49,10 +50,6 @@ const schema = z.object({
     .max(5),
 })
 
-const description = `Ask the user one or more multiple-choice questions to disambiguate their request. Use this whenever the request is genuinely ambiguous and the right answer changes the plan.
-
-Limits: ≤ 5 questions per call, each with 2-6 short options.`
-
 export function createAskUserQuestionTool(
   respond: AskUserQuestionResponder = readlineResponder,
 ) {
@@ -63,7 +60,11 @@ export function createAskUserQuestionTool(
         .map((a, i) => `Q${i + 1}: ${input.questions[i]?.question ?? ''}\nA${i + 1}: ${a}`)
         .join('\n\n')
     },
-    { name: 'ask_user_question', description, schema },
+    {
+      name: TOOL_NAMES.AskUserQuestion,
+      description: TOOL_DESCRIPTIONS.AskUserQuestion,
+      schema,
+    },
   )
 }
 

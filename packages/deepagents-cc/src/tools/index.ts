@@ -1,5 +1,28 @@
-export { createBashTool, type BashToolOptions } from './bash.js'
-export { PersistentShell, type ShellResult, type PersistentShellOptions } from './persistentShell.js'
+// cc-aligned tool registry — names, descriptions, and read/write classification.
+export {
+  TOOL_NAMES,
+  TOOL_DESCRIPTIONS,
+  ALL_CC_TOOL_NAMES,
+  CC_READ_ONLY_TOOLS,
+  CC_WRITE_TOOLS,
+  type ToolName,
+} from './ccToolNames.js'
+
+// Bash + bg jobs.
+export {
+  createBashTools,
+  type BashToolOptions,
+  type BashToolBundle,
+} from './bash.js'
+export {
+  PersistentShell,
+  BackgroundJobRegistry,
+  type ShellResult,
+  type PersistentShellOptions,
+  type BackgroundJob,
+} from './persistentShell.js'
+
+// Web.
 export {
   createWebFetchTool,
   type WebFetchOptions,
@@ -10,11 +33,14 @@ export {
   type WebSearchHit,
   type WebSearchImpl,
 } from './webSearch.js'
+
+// Plan mode (only ExitPlanMode — cc has no EnterPlanMode tool).
 export {
-  createEnterPlanModeTool,
   createExitPlanModeTool,
   PLAN_MODE_TOOL_NAMES,
 } from './planMode.js'
+
+// HITL.
 export {
   createAskUserQuestionTool,
   type AskUserQuestionInput,
@@ -22,24 +48,29 @@ export {
   type QuestionOption,
 } from './askUserQuestion.js'
 
-// Filesystem tools (real disk, cc-style semantics).
-export { createReadFileTool, type ReadFileToolOptions } from './readFile.js'
-export { createWriteFileTool, type WriteFileToolOptions } from './writeFile.js'
-export { createEditFileTool, type EditFileToolOptions } from './editFile.js'
-export { createLsTool, type LsToolOptions } from './ls.js'
-export { createGlobTool, type GlobToolOptions, globToRegex } from './glob.js'
-export { createGrepTool, type GrepToolOptions, _resetRipgrepCache } from './grep.js'
+// Filesystem (real disk, cc-style semantics).
+export { createReadTool, type ReadToolOptions } from './readFile.js'
+export { createWriteTool, type WriteToolOptions } from './writeFile.js'
+export { createEditTool, type EditToolOptions } from './editFile.js'
+export { createGlobTool, type GlobToolOptions } from './glob.js'
+export { globToRegex } from './globRegex.js'
+export {
+  createGrepTool,
+  type GrepToolOptions,
+  _resetRipgrepCache,
+} from './grep.js'
+export { createNotebookEditTool } from './notebookEdit.js'
 
 // Planning + delegation.
-export { createWriteTodosTool, type Todo } from './writeTodos.js'
+export { createTodoWriteTool, type Todo } from './writeTodos.js'
 export {
-  createTaskTool,
+  createAgentTool,
   type SubAgent,
   type SubAgentFactory,
-  type TaskToolOptions,
+  type AgentToolOptions,
 } from './task.js'
 
-// Shared helpers (exported for advanced users / tests).
+// Shared helpers.
 export {
   addLineNumbers,
   applyDeterministicEdit,
@@ -51,29 +82,3 @@ export {
   writeTextFile,
   type FileStateCache,
 } from './fsUtils.js'
-
-/**
- * Tool name registry for cc-only tools. Used to detect collisions with
- * user-supplied tools.
- */
-export const CC_TOOL_NAMES = [
-  // shell + web
-  'bash',
-  'web_fetch',
-  'web_search',
-  // plan mode
-  'enter_plan_mode',
-  'exit_plan_mode',
-  // user interaction
-  'ask_user_question',
-  // filesystem
-  'read_file',
-  'write_file',
-  'edit_file',
-  'ls',
-  'glob',
-  'grep',
-  // planning + delegation
-  'write_todos',
-  'task',
-] as const

@@ -1,23 +1,12 @@
 /**
- * edit_file — deterministic single-occurrence string replacement.
- *
- * Mirrors cc's FileEditTool semantics:
- *  - old_string must exist EXACTLY ONCE in the file (otherwise the model
- *    hasn't given enough context to disambiguate — it must add more lines
- *    or pass replace_all=true).
- *  - old_string === new_string is rejected (no-op).
- *  - The file must have been read earlier in this session (stale-edit guard).
- *  - Writes are atomic (tmp + rename).
- *
- * Why this matters: deepagents' edit_file is more permissive (regex / fuzzy
- * matching), which sounds nicer until you watch a model accidentally
- * replace a comment that happened to match. Strict equality + uniqueness
- * is the contract that keeps multi-file refactors safe.
+ * Edit tool — cc-aligned. Deterministic single-occurrence string replacement
+ * with the read-before-edit guard, plus optional `replace_all` for renames.
  */
 
 import fs from 'node:fs'
 import { tool } from 'langchain'
 import { z } from 'zod/v4'
+import { TOOL_DESCRIPTIONS, TOOL_NAMES } from './ccToolNames.js'
 import {
   applyDeterministicEdit,
   ensureAbsolute,
@@ -32,29 +21,19 @@ const schema = z.object({
   old_string: z
     .string()
     .min(1)
-    .describe(
-      'Exact text to replace. MUST be unique in the file unless replace_all=true. Include enough surrounding context to be unambiguous.',
-    ),
+    .describe('Exact text to replace. MUST be unique in the file unless replace_all=true.'),
   new_string: z.string().describe('Replacement text. Empty string deletes old_string.'),
   replace_all: z
     .boolean()
     .optional()
-    .describe('When true, replace every occurrence of old_string. Default false.'),
+    .describe('Replace every occurrence of old_string. Default false.'),
 })
 
-const description = `Edit a file by replacing an exact string.
-
-Rules:
- - file_path must be ABSOLUTE and the file must have been read earlier in this session.
- - old_string must occur exactly once unless replace_all=true.
- - old_string === new_string is rejected. Empty new_string deletes old_string.
- - Write is atomic (tmp + rename); concurrent edits are detected via mtime.`
-
-export interface EditFileToolOptions {
+export interface EditToolOptions {
   fileStateCache: FileStateCache
 }
 
-export function createEditFileTool(options: EditFileToolOptions) {
+export function createEditTool(options: EditToolOptions) {
   return tool(
     (input: z.infer<typeof schema>) => {
       const abs = ensureAbsolute(input.file_path, 'file_path')
@@ -88,6 +67,10 @@ export function createEditFileTool(options: EditFileToolOptions) {
           : 1
       return `edited ${abs} (${occurrences} occurrence${occurrences === 1 ? '' : 's'} replaced)`
     },
-    { name: 'edit_file', description, schema },
+    {
+      name: TOOL_NAMES.Edit,
+      description: TOOL_DESCRIPTIONS.Edit,
+      schema,
+    },
   )
 }

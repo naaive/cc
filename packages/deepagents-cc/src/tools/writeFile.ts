@@ -1,15 +1,12 @@
 /**
- * write_file — atomic, real-disk writes.
- *
- * Refuses to overwrite a file that has changed on disk since the last
- * read_file (same stale-write guard cc uses). To create a brand-new file
- * the model must NOT have read it first; to overwrite an existing file it
- * must have read it (so the cache has a known mtime).
+ * Write tool — cc-aligned. Atomic real-disk writes with the read-before-write
+ * guard so we never silently clobber a file the model hasn't seen.
  */
 
 import fs from 'node:fs'
 import { tool } from 'langchain'
 import { z } from 'zod/v4'
+import { TOOL_DESCRIPTIONS, TOOL_NAMES } from './ccToolNames.js'
 import {
   ensureAbsolute,
   statMtime,
@@ -22,21 +19,11 @@ const schema = z.object({
   content: z.string().describe('Full file content.'),
 })
 
-const description = `Write a file to disk atomically.
-
-Rules:
- - file_path must be ABSOLUTE.
- - Overwriting an existing file requires you to have read it earlier in this session
-   (so we can detect concurrent edits). If you have not, call read_file first.
- - Parent directories are created automatically.
- - This is the right tool for creating brand-new files. For modifying part of an
-   existing file, prefer edit_file.`
-
-export interface WriteFileToolOptions {
+export interface WriteToolOptions {
   fileStateCache: FileStateCache
 }
 
-export function createWriteFileTool(options: WriteFileToolOptions) {
+export function createWriteTool(options: WriteToolOptions) {
   return tool(
     (input: z.infer<typeof schema>) => {
       const abs = ensureAbsolute(input.file_path, 'file_path')
@@ -45,12 +32,12 @@ export function createWriteFileTool(options: WriteFileToolOptions) {
         const known = options.fileStateCache.get(abs)
         if (known === undefined) {
           throw new Error(
-            `${abs} exists. Read it first (or pick a different path) so I can detect concurrent edits.`,
+            `${abs} exists. Use the Read tool to read it first, then call Write.`,
           )
         }
         if (Math.abs(known - existing) > 1) {
           throw new Error(
-            `${abs} changed on disk since the last read. Re-read it before writing.`,
+            `${abs} changed on disk since the last Read. Re-read it before writing.`,
           )
         }
       }
@@ -60,6 +47,10 @@ export function createWriteFileTool(options: WriteFileToolOptions) {
       const action = existing === undefined ? 'created' : 'overwrote'
       return `${action} ${abs} (${input.content.length} bytes)`
     },
-    { name: 'write_file', description, schema },
+    {
+      name: TOOL_NAMES.Write,
+      description: TOOL_DESCRIPTIONS.Write,
+      schema,
+    },
   )
 }

@@ -3,10 +3,17 @@ export {
   type PermissionModeMiddlewareOptions,
 } from './permissionMode.js'
 export {
-  createSystemReminderMiddleware,
-  stockReminders,
+  createContextEngineeringMiddleware,
+  ccReminders,
   type Reminder,
   type ReminderContext,
+  type ContextEngineeringMiddlewareOptions,
+  type CCReminderFactory,
+} from './contextEngineering.js'
+// Legacy aliases.
+export {
+  createSystemReminderMiddleware,
+  stockReminders,
   type SystemReminderMiddlewareOptions,
 } from './systemReminder.js'
 export {
@@ -25,3 +32,7 @@ export {
   roughTokenCount,
   type SummarizationMiddlewareOptions,
 } from './summarization.js'
+export {
+  createPromptCacheMiddleware,
+  type PromptCacheMiddlewareOptions,
+} from './promptCache.js'

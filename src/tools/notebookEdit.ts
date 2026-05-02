@@ -1,22 +1,22 @@
 /**
- * NotebookEdit — . Edits a Jupyter notebook (.ipynb) by cell id.
+ * NotebookEdit — edits a Jupyter notebook (.ipynb) by cell id.
  *
- * The notebook is loaded as JSON, mutated, then atomically rewritten via
- * the same `tmp + rename` path Write/Edit use. Three modes:
+ * Three modes:
  *  - replace: swap cell_id's source with new_source.
  *  - insert: insert a new cell at cell_id's position (or at the end if
  *    cell_id is null). cell_type must be "code" or "markdown".
  *  - delete: remove cell_id.
  *
- * Our Notebook semantics — newline preservation, source-as-array — are
- * matched here so notebooks remain valid Jupyter docs after editing.
+ * Goes through `FileStateGuard.prepareEdit` so notebooks honor the same
+ * read-before-edit invariant Read/Write/Edit do.
  */
 
 import fs from 'node:fs'
 import { tool } from 'langchain'
 import { z } from 'zod'
 import { TOOL_DESCRIPTIONS, TOOL_NAMES } from './toolNames.js'
-import { ensureAbsolute, writeTextFile } from './fsUtils.js'
+import { writeTextFile } from './fsUtils.js'
+import { liveMtime, type FileStateGuard } from './fileStateGuard.js'
 
 interface JupyterCell {
   cell_type: 'code' | 'markdown' | 'raw'
@@ -49,13 +49,20 @@ const schema = z.object({
   edit_mode: z.enum(['replace', 'insert', 'delete']).optional().describe('Default: replace.'),
 })
 
-export function createNotebookEditTool() {
+export interface NotebookEditToolOptions {
+  fileStateGuard: FileStateGuard
+}
+
+export function createNotebookEditTool(options: NotebookEditToolOptions) {
+  const { fileStateGuard: guard } = options
   return tool(
     (input: z.infer<typeof schema>) => {
-      const abs = ensureAbsolute(input.notebook_path, 'notebook_path')
-      if (!abs.endsWith('.ipynb')) {
-        throw new Error(`notebook_path must end with .ipynb (got ${abs})`)
+      if (!input.notebook_path.endsWith('.ipynb')) {
+        throw new Error(
+          `notebook_path must end with .ipynb (got ${input.notebook_path})`,
+        )
       }
+      const { abs } = guard.prepareEdit(input.notebook_path)
       const raw = fs.readFileSync(abs, 'utf8')
       const nb = JSON.parse(raw) as JupyterNotebook
       if (!Array.isArray(nb.cells)) {
@@ -97,6 +104,7 @@ export function createNotebookEditTool() {
       }
 
       writeTextFile(abs, JSON.stringify(nb, null, 1))
+      guard.record(abs, liveMtime(abs))
       return `${mode}d cell ${input.cell_id ?? '<new>'} in ${abs}`
     },
     {

@@ -38,6 +38,7 @@ import {
   MonitorRegistry,
   PersistentPowerShell,
   PersistentShell,
+  resolveRoots,
   TOOL_NAMES,
   type AskUserQuestionResponder,
   type ConfigSettingSpec,
@@ -96,6 +97,7 @@ export function buildTools(input: BuildToolsInput): BuildToolsResult {
   const fileStateGuard = createFileStateGuard({
     cache: input.fileStateCache,
     resultStore: input.resultStore,
+    roots: resolveRoots(input.cwd, input.additionalDirectories),
   })
 
   if (isEnabled(TOOL_NAMES.Bash)) {
@@ -115,30 +117,17 @@ export function buildTools(input: BuildToolsInput): BuildToolsResult {
     ccTools.push(
       createReadTool({
         fileStateGuard,
-        cwd: input.cwd,
-        additionalDirectories: input.additionalDirectories,
         onFileRead: input.skillActivator
           ? abs => input.skillActivator!.notice(abs)
           : undefined,
       }),
     )
   if (isEnabled(TOOL_NAMES.Write))
-    ccTools.push(
-      createWriteTool({
-        fileStateGuard,
-        cwd: input.cwd,
-        additionalDirectories: input.additionalDirectories,
-      }),
-    )
+    ccTools.push(createWriteTool({ fileStateGuard }))
   if (isEnabled(TOOL_NAMES.Edit))
-    ccTools.push(
-      createEditTool({
-        fileStateGuard,
-        cwd: input.cwd,
-        additionalDirectories: input.additionalDirectories,
-      }),
-    )
-  if (isEnabled(TOOL_NAMES.NotebookEdit)) ccTools.push(createNotebookEditTool())
+    ccTools.push(createEditTool({ fileStateGuard }))
+  if (isEnabled(TOOL_NAMES.NotebookEdit))
+    ccTools.push(createNotebookEditTool({ fileStateGuard }))
   if (isEnabled(TOOL_NAMES.Glob)) ccTools.push(createGlobTool({ cwd: input.cwd }))
   if (isEnabled(TOOL_NAMES.Grep)) ccTools.push(createGrepTool({ cwd: input.cwd }))
   if (isEnabled(TOOL_NAMES.TodoWrite)) ccTools.push(createTodoWriteTool())

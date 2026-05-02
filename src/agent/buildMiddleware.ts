@@ -46,6 +46,7 @@ import type { PermissionMode, PermissionRule } from '../permission.js'
 import type { Settings } from '../settings.js'
 import type {
   FileStateCache,
+  HasLastCwd,
   MonitorRegistry,
   PersistentShell,
   ResultStore,
@@ -58,6 +59,8 @@ export interface BuildMiddlewareInput {
   settings: Settings
   fileStateCache: FileStateCache
   shell: PersistentShell
+  /** Extra shells (PowerShell, host-supplied) that should drive cwd-drift reminders. */
+  extraCwdSources?: HasLastCwd[]
   monitorRegistry: MonitorRegistry | null
   resultStore: ResultStore | null
   skillActivator: SkillActivator | null
@@ -133,12 +136,13 @@ export function buildMiddleware(input: BuildMiddlewareInput): AgentMiddleware[] 
     )
   }
 
+  const cwdSources: HasLastCwd[] = [input.shell, ...(input.extraCwdSources ?? [])]
   const reminders: Reminder[] = [
     ccReminders.todoState(),
     ccReminders.todoStaleNudge(),
     ccReminders.planModeActive(),
     ccReminders.fileStateContext(input.fileStateCache),
-    ccReminders.cwdDrift(() => input.shell.lastCwd, input.cwd),
+    ...cwdSources.map(s => ccReminders.cwdDrift(() => s.lastCwd, input.cwd)),
   ]
   if (input.monitorRegistry) {
     reminders.push(ccReminders.monitorExits(input.monitorRegistry))

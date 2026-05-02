@@ -41,10 +41,14 @@ bun run test:all       # typecheck + test
 | Permission gate             | `src/permission.ts` (one decision layer, mode + rules)  |
 | Tool registry / names       | `src/tools/toolNames.ts`                                |
 | Built-in tools              | `src/tools/*.ts`                                        |
-| Read/Edit/Write seam        | `src/tools/fileStateGuard.ts`                           |
+| Read/Edit/Write/NotebookEdit seam | `src/tools/fileStateGuard.ts`                     |
+| Persistent shells (Bash + PowerShell) | `src/tools/persistentShell.ts` (`BasePersistentShell`) |
+| Compaction tiers (T0–T4)    | `src/middleware/compactors.ts`                          |
+| Compaction orchestrator     | `src/middleware/summarization.ts`                       |
 | Middleware                  | `src/middleware/*.ts`                                   |
 | Skills (Agent Skills spec)  | `src/skills/*.ts`                                       |
 | Slash commands              | `src/commands/*.ts`                                     |
+| Discoverable-module helpers | `src/lib/discoverableModule.ts` (shared by Skills + Commands) |
 | MCP adapter                 | `src/mcp/index.ts`                                      |
 | Pure helpers                | `src/lib/*.ts`                                          |
 
@@ -55,8 +59,13 @@ The middleware chain runs in the order documented in `agent/buildMiddleware.ts` 
 A few load-bearing names. Use them consistently when adding code.
 
 - **PermissionGate** (`src/permission.ts`) — single decision function `evaluatePermission({ mode, toolName, args, rules, extraReadOnly })` returning a `PermissionDecision`. Coarse mode (`plan`/`bypassPermissions`/…) and per-tool/per-arg rules are evaluated together; rules win first so `deny Bash command="rm -rf*"` fires even under `bypassPermissions`. Don't reach into the underlying classifier or rule matcher from outside this file.
-- **FileStateGuard** (`src/tools/fileStateGuard.ts`) — single seam Read/Edit/Write call into for "may the model touch this file?". Owns the read-before-edit invariant, the mtime-fresh check, the `forge-store://` storage-URI restoration, and the `FILE_UNCHANGED_STUB` short-circuit. New fs-aware tools should depend on the guard, never on `FileStateCache` or `ResultStore` directly.
-- **ReminderStore** (`src/middleware/reminders.ts`) — per-reminder state pocket handed to each `Reminder.shouldFire(ctx)`. Two reminders can use the same key (`lastTurn`) with no risk of collision; `createReminderStore(state, name)` does the namespacing.
+- **PermissionContext** (`src/permission.ts`) — read-side companion to the gate. Tools and reminders that want to ask "what would the gate say?" outside `wrapToolCall` consume a context built via `createPermissionContext({ getMode, getRules, extraReadOnly })`. Mode mutation stays in the middleware; mode reads go through this context.
+- **FileStateGuard** (`src/tools/fileStateGuard.ts`) — single deep seam every fs tool calls into. Owns path resolution (absolute-only), boundary enforcement against cwd + `additionalDirectories`, the read-before-edit invariant, the mtime-fresh check, the `forge-store://` storage-URI restoration, the `FILE_UNCHANGED_STUB` short-circuit, and ENOENT path-recovery hints. The interface is three methods (`prepareRead`, `prepareEdit`, `prepareWrite`) plus `record`; tools never touch `FileStateCache` or `ResultStore` directly.
+- **BasePersistentShell** (`src/tools/persistentShell.ts`) — the lifecycle, busy-flag, sentinel run loop, output cap, and `lastCwd` tracking shared by `PersistentShell` (Bash) and `PersistentPowerShell` (pwsh). Each subclass supplies a `ShellSpec` (binary, spawn args, env extras, command-wrapping). The `HasLastCwd` interface is the seam reminders consume — never type-check on the concrete class.
+- **Compactor** (`src/middleware/compactors.ts`) — one tier, one factory. `summarization.ts` builds the list (T0 idle → T1 micro → T2 dedupe → T3 aged-media → T3.5 excess-media → T4 summarize) and orchestrates them. Adding a tier means adding a `create*Compactor()` and slotting it into the list — never reach into the orchestrator's loop.
+- **DiscoverableModule** (`src/lib/discoverableModule.ts`) — shared `ModuleSource`, size cap, and project-shadows-user dedup used by both `src/skills/loader.ts` and `src/commands/loader.ts`. A bug in dedup or the size cap is fixed once.
+- **PromptSection** (`src/agent/systemPromptAssembly.ts`) — the appendix is a list of `{ name, render() }` sections (host-appendix, deferred-tools, skills, output-style). A new appendix block adds a section here without touching `composeAppendix`.
+- **ReminderStore** (`src/middleware/reminders.ts`) — per-reminder state pocket handed to each `Reminder.shouldFire(ctx)`. Two reminders can use the same key (`lastTurn`) with no risk of collision; `createReminderStore(state, name)` does the namespacing. Cooldown-style reminders share a `shouldFireOnInterval(ctx, n)` helper so the throttle logic isn't hand-rolled per reminder.
 - **assembleSystemPrompt** (`src/agent/systemPromptAssembly.ts`) — the only function that decides what the model sees. `prompt.ts` is a template library; never compose a prompt by hand-concatenating its sections.
 
 ## Testing rules

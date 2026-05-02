@@ -1,22 +1,15 @@
 /**
- * Read tool — name, plus three context-engineering tricks:
+ * Read tool — three context-engineering tricks plus media handling:
  *
  *   1. **File-unchanged stub.** When the model Reads the same file twice
  *      and the mtime hasn't changed, return a tiny stub.
  *   2. **Storage-URI passthrough.** `forge-store://<id>` paths return the
  *      content stashed by the eviction middleware.
- *   3. **Path recovery.** ENOENT errors get a "Did you mean ...?" hint
- *      computed from a Levenshtein scan of the parent dir + a basename
- *      walk under cwd.
+ *   3. **Path recovery.** ENOENT errors get a "Did you mean ...?" hint.
  *
- * Plus media support — when the file is an image (PNG/JPG/GIF/WEBP) or
- * a PDF, we return content blocks (image / document) instead of plain
- * text so the model can see them. Text reading stays the default.
- *
- * Plus `additionalDirectories` boundary check from settings.
- *
- * The cache + storage-URI policy lives in `FileStateGuard`; this tool
- * just orchestrates the read.
+ * (1)–(3) plus boundary checks all live in `FileStateGuard`. This tool
+ * dispatches the prepared read to a media handler when the file is an
+ * image / PDF / notebook, and otherwise returns line-numbered text.
  */
 
 import fs from 'node:fs'
@@ -24,19 +17,8 @@ import path from 'node:path'
 import { tool } from 'langchain'
 import { z } from 'zod'
 import { TOOL_DESCRIPTIONS, TOOL_NAMES } from './toolNames.js'
-import {
-  addLineNumbers,
-  DEFAULT_READ_LIMIT,
-  enforceBoundary,
-  ensureAbsolute,
-  readTextFile,
-  resolveRoots,
-} from './fsUtils.js'
-import {
-  FILE_UNCHANGED_STUB,
-  type FileStateGuard,
-} from './fileStateGuard.js'
-import { pathRecoveryHint } from './pathRecovery.js'
+import { addLineNumbers, DEFAULT_READ_LIMIT, readTextFile } from './fsUtils.js'
+import { FILE_UNCHANGED_STUB, type FileStateGuard } from './fileStateGuard.js'
 
 export { FILE_UNCHANGED_STUB }
 
@@ -60,10 +42,6 @@ const schema = z.object({
 
 export interface ReadToolOptions {
   fileStateGuard: FileStateGuard
-  /** Working directory (used by path recovery + boundary checks). */
-  cwd?: string
-  /** Extra directories the Read tool may touch beyond cwd. */
-  additionalDirectories?: readonly string[]
   /** Hook invoked when a file is read — used by conditional skill activation. */
   onFileRead?: (absPath: string) => void
 }
@@ -75,10 +53,6 @@ const NOTEBOOK_EXT = '.ipynb'
 type MediaHandler = (absPath: string) => unknown
 
 export function createReadTool(options: ReadToolOptions) {
-  const roots = resolveRoots(
-    options.cwd ?? process.cwd(),
-    options.additionalDirectories ?? [],
-  )
   const mediaHandlers = new Map<string, MediaHandler>()
   for (const ext of IMAGE_EXTS) mediaHandlers.set(ext, p => readImageContent(p, ext))
   mediaHandlers.set(PDF_EXT, readPdfContent)
@@ -87,30 +61,16 @@ export function createReadTool(options: ReadToolOptions) {
 
   return tool(
     (input: z.infer<typeof schema>) => {
-      const stored = guard.restoreFromStore(input.file_path)
-      if (stored !== null) return stored
-
-      const abs = ensureAbsolute(input.file_path, 'file_path')
-      enforceBoundary(abs, roots)
-
       const paged = input.offset != null || input.limit != null
-      let check: { unchanged: true } | { mtime: number }
-      try {
-        check = guard.checkRead(abs, paged)
-      } catch (err) {
-        // ENOENT-style misses get a "Did you mean ...?" hint.
-        if (err instanceof Error && err.message.startsWith('file not found:')) {
-          const hint = pathRecoveryHint(abs, roots.cwd)
-          throw new Error(`${err.message}${hint ? `\n\n${hint}` : ''}`)
-        }
-        throw err
-      }
-      if ('unchanged' in check) return FILE_UNCHANGED_STUB
+      const prepared = guard.prepareRead(input.file_path, paged)
+      if (prepared.kind === 'stored') return prepared.content
+      if (prepared.kind === 'unchanged') return FILE_UNCHANGED_STUB
 
+      const { abs, mtime } = prepared
       const ext = path.extname(abs).toLowerCase()
       const mediaHandler = mediaHandlers.get(ext)
       if (mediaHandler) {
-        guard.record(abs, check.mtime)
+        guard.record(abs, mtime)
         options.onFileRead?.(abs)
         return mediaHandler(abs)
       }

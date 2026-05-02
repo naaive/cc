@@ -15,6 +15,9 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { createNotebookEditTool } from '../tools/notebookEdit.js'
+import { createFileStateGuard } from '../tools/fileStateGuard.js'
+import { makeFileStateCache, resolveRoots } from '../tools/fsUtils.js'
 
 interface JupyterCell {
   cell_type: 'code' | 'markdown' | 'raw'
@@ -121,5 +124,69 @@ describe('NotebookEdit semantics', () => {
 
   test('empty source yields an empty array', () => {
     expect(sourceFromString('')).toEqual([])
+  })
+})
+
+describe('NotebookEdit goes through FileStateGuard', () => {
+  let tmp: string
+  let nbPath: string
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-nb-guard-'))
+    nbPath = path.join(tmp, 'notebook.ipynb')
+    fs.writeFileSync(
+      nbPath,
+      JSON.stringify({
+        cells: [
+          {
+            cell_type: 'code',
+            id: 'cell-a',
+            source: ['print("a")'],
+            metadata: {},
+            outputs: [],
+            execution_count: null,
+          },
+        ],
+        metadata: {},
+        nbformat: 4,
+        nbformat_minor: 5,
+      }),
+    )
+  })
+
+  afterEach(() => {
+    fs.rmSync(tmp, { recursive: true, force: true })
+  })
+
+  test('refuses to edit without a prior Read (the deepening fix)', async () => {
+    const cache = makeFileStateCache()
+    const guard = createFileStateGuard({ cache, roots: resolveRoots(tmp) })
+    const tool = createNotebookEditTool({ fileStateGuard: guard })
+    await expect(
+      tool.invoke({
+        notebook_path: nbPath,
+        new_source: 'print("b")',
+        cell_id: 'cell-a',
+      }),
+    ).rejects.toThrow(/Read .* before editing/)
+  })
+
+  test('succeeds once the file has been Read first', async () => {
+    const cache = makeFileStateCache()
+    const guard = createFileStateGuard({ cache, roots: resolveRoots(tmp) })
+    // Simulate a prior Read by recording the live mtime.
+    const stat = fs.statSync(nbPath)
+    guard.record(nbPath, stat.mtimeMs)
+    const tool = createNotebookEditTool({ fileStateGuard: guard })
+    const out = await tool.invoke({
+      notebook_path: nbPath,
+      new_source: 'print("b")',
+      cell_id: 'cell-a',
+    })
+    expect(out).toContain('replaced cell cell-a')
+    const after = JSON.parse(fs.readFileSync(nbPath, 'utf8')) as {
+      cells: Array<{ source: string[] }>
+    }
+    expect(after.cells[0]!.source.join('')).toBe('print("b")')
   })
 })

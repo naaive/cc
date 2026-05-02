@@ -17,19 +17,22 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { parseFrontmatter } from '../lib/yamlFrontmatter.js'
+import {
+  dedupeByName,
+  MAX_MODULE_FILE_SIZE,
+  readModuleSource,
+  type DiscoverableModule,
+  type ModuleSource,
+} from '../lib/discoverableModule.js'
 
-export const MAX_SKILL_FILE_SIZE = 10 * 1024 * 1024
+export const MAX_SKILL_FILE_SIZE = MAX_MODULE_FILE_SIZE
 export const MAX_SKILL_NAME_LENGTH = 64
 export const MAX_SKILL_DESCRIPTION_LENGTH = 1024
 
 const SKILL_NAME_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/
 
-export interface SkillMetadata {
-  name: string
+export interface SkillMetadata extends DiscoverableModule {
   description: string
-  /** Absolute path to the SKILL.md file. */
-  path: string
-  source: 'user' | 'project' | 'inline'
   license?: string
   compatibility?: string
   allowedTools?: string
@@ -82,35 +85,19 @@ function readSkillDir(
   return out
 }
 
-function dedupeByName(skills: SkillMetadata[]): SkillMetadata[] {
-  // Project sources later in the list will overwrite user sources earlier,
-  // preserving the contract (project skills shadow user skills with same name).
-  const map = new Map<string, SkillMetadata>()
-  for (const s of skills) {
-    map.set(s.name, s)
-  }
-  return [...map.values()].sort((a, b) => a.name.localeCompare(b.name))
-}
-
 export function parseSkillFile(
   filePath: string,
   source: 'user' | 'project',
 ): SkillMetadata | null {
-  let raw: string
-  try {
-    const stat = fs.statSync(filePath)
-    if (stat.size > MAX_SKILL_FILE_SIZE) return null
-    raw = fs.readFileSync(filePath, 'utf8')
-  } catch {
-    return null
-  }
+  const raw = readModuleSource(filePath)
+  if (raw === null) return null
   return parseSkillMetadata(raw, filePath, source)
 }
 
 export function parseSkillMetadata(
   raw: string,
   filePath: string,
-  source: 'user' | 'project' | 'inline',
+  source: ModuleSource,
 ): SkillMetadata | null {
   const fm = parseFrontmatter(raw)
   if (!fm.hasFrontmatter) return null

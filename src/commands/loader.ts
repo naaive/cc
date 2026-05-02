@@ -31,16 +31,21 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { parseFrontmatter } from '../lib/yamlFrontmatter.js'
+import {
+  dedupeByName,
+  MAX_MODULE_FILE_SIZE,
+  readModuleSource,
+  type DiscoverableModule,
+} from '../lib/discoverableModule.js'
 
-export const MAX_COMMAND_FILE_SIZE = 10 * 1024 * 1024
+export const MAX_COMMAND_FILE_SIZE = MAX_MODULE_FILE_SIZE
 // Must start with a letter (to disambiguate from numeric prefixes that
 // usually indicate accidental file names). Same lower-kebab convention
 // as the Skills spec.
 const COMMAND_NAME_PATTERN = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/
 
-export interface CustomCommand {
+export interface CustomCommand extends DiscoverableModule {
   /** Slash name without leading "/". Folder paths use ":" as separator. */
-  name: string
   description?: string
   argumentHint?: string
   /** Whitespace-separated tool names this command is allowed to use. */
@@ -48,9 +53,11 @@ export interface CustomCommand {
   model?: string
   /** Raw body (template) as written in the .md file, sans frontmatter. */
   body: string
+  /**
+   * Commands always come from disk (no inline mode), but the wider
+   * DiscoverableModule shape allows 'inline' too — narrow it here.
+   */
   source: 'user' | 'project'
-  /** Absolute path to the command's .md file. */
-  path: string
 }
 
 export interface ListCommandsOptions {
@@ -99,27 +106,14 @@ function walk(
   }
 }
 
-function dedupeByName(cmds: CustomCommand[]): CustomCommand[] {
-  // Project (later in the list) shadows user.
-  const map = new Map<string, CustomCommand>()
-  for (const c of cmds) map.set(c.name, c)
-  return [...map.values()].sort((a, b) => a.name.localeCompare(b.name))
-}
-
 export function parseCommandFile(
   filePath: string,
   name: string,
   source: 'user' | 'project',
 ): CustomCommand | null {
   if (!isValidCommandName(name)) return null
-  let raw: string
-  try {
-    const stat = fs.statSync(filePath)
-    if (stat.size > MAX_COMMAND_FILE_SIZE) return null
-    raw = fs.readFileSync(filePath, 'utf8')
-  } catch {
-    return null
-  }
+  const raw = readModuleSource(filePath)
+  if (raw === null) return null
   const { fields, body } = parseFrontmatter(raw)
   const cmd: CustomCommand = {
     name,

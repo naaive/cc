@@ -347,6 +347,7 @@ export function createForgeAgent(
     settings,
     fileStateCache,
     shell,
+    extraCwdSources: powershell ? [powershell] : undefined,
     monitorRegistry,
     resultStore,
     skillActivator,

@@ -72,6 +72,18 @@ export function createReminderStore(
 }
 
 /**
+ * Per-turn throttle. Returns true at most once every `everyNTurns`,
+ * recording the turn it last fired in the reminder's own store. Centralises
+ * the boilerplate every cooldown-style reminder used to hand-roll.
+ */
+function shouldFireOnInterval(ctx: ReminderContext, everyNTurns: number): boolean {
+  const last = ctx.store.get<number>('lastTurn') ?? -Infinity
+  if (ctx.turn - last < everyNTurns) return false
+  ctx.store.set('lastTurn', ctx.turn)
+  return true
+}
+
+/**
  * reminders. Each is a factory so closures can hold their own
  * "last fired at" cache without leaking across middleware instances.
  */
@@ -110,9 +122,7 @@ export const ccReminders = {
       name: 'todo-stale-nudge',
       shouldFire(ctx) {
         if (ctx.todos.length > 0) return null
-        const last = ctx.store.get<number>('lastTurn') ?? -Infinity
-        if (ctx.turn - last < everyNTurns) return null
-        ctx.store.set('lastTurn', ctx.turn)
+        if (!shouldFireOnInterval(ctx, everyNTurns)) return null
         return "The TodoWrite tool hasn't been used recently. If you're working on tasks that would benefit from tracking progress, consider using TodoWrite. Only use it if it's relevant — ignore otherwise. NEVER mention this reminder to the user."
       },
     }
@@ -142,10 +152,7 @@ export const ccReminders = {
     return {
       name,
       shouldFire(ctx) {
-        const last = ctx.store.get<number>('lastTurn') ?? -Infinity
-        if (ctx.turn - last < everyNTurns) return null
-        ctx.store.set('lastTurn', ctx.turn)
-        return text
+        return shouldFireOnInterval(ctx, everyNTurns) ? text : null
       },
     }
   },

@@ -140,6 +140,12 @@ export interface CreateClaudeCodeAgentParams {
   /** Persistence: passes through to `createAgent`. */
   checkpointer?: BaseCheckpointSaver
   store?: BaseStore
+  /**
+   * When true, pairing-repair middleware throws on orphan tool_use /
+   * tool_result instead of inserting placeholders. Use for eval / training
+   * pipelines that can't tolerate synthetic data.
+   */
+  strictPairing?: boolean
   /** Extra middleware appended at the end of the chain (host passthrough). */
   extraMiddleware?: AgentMiddleware[]
   /** Inject a shared PowerShell instance (Windows hosts). */
@@ -357,6 +363,7 @@ export function createClaudeCodeAgent(
     reminders: params.reminders,
     summarization: params.summarization,
     promptCache: params.promptCache,
+    strictPairing: params.strictPairing,
     extraMiddleware: params.extraMiddleware,
   })
 

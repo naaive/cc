@@ -13,6 +13,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
+import { markMeta } from '../lib/messageUtils.js'
 import {
   createMiddleware,
   HumanMessage,
@@ -101,9 +102,11 @@ export function createHooksMiddleware(
         // Replace the user message with an explanation so the model knows
         // the prompt was rejected — this lets it apologize / stop cleanly.
         const messages = [...state.messages]
-        messages[messages.lastIndexOf(last)] = new HumanMessage(
+        const blockMsg = new HumanMessage(
           `[blocked by UserPromptSubmit hook] ${blocked.message ?? 'rejected'}`,
         )
+        markMeta(blockMsg)
+        messages[messages.lastIndexOf(last)] = blockMsg
         return { messages }
       }
       const appended = results

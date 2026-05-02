@@ -43,6 +43,10 @@ export {
   createDenialTrackingMiddleware,
   type DenialTrackingMiddlewareOptions,
 } from './denialTracking.js'
+export {
+  createPairingRepairMiddleware,
+  type PairingRepairOptions,
+} from './pairingRepair.js'
 
 // Internal helpers (autoPinFirstByRole, isMessagePinned, roughTokenCount,
 // denialFingerprint, stableJson) live in `src/lib/` and are imported

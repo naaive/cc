@@ -48,6 +48,7 @@ import { z } from 'zod/v4'
 import {
   djb2,
   isMessagePinned as isPinned,
+  recentRoundCutoff,
   roughTokenCount,
   stringifyContent,
 } from '../lib/messageUtils.js'
@@ -55,12 +56,21 @@ import {
 export { isMessagePinned, pinMessage, roughTokenCount } from '../lib/messageUtils.js'
 
 export interface SummarizationMiddlewareOptions {
-  /** T1: keep tool_results from at least this many recent turns intact. */
+  /**
+   * T0 (time-gap microcompact). When the wall-clock gap since the last
+   * assistant message exceeds this many minutes, the prompt cache is
+   * assumed cold and aggressive microcompact runs proactively. Default 30.
+   * Pass 0 to disable.
+   */
+  timeGapMicrocompactMinutes?: number
+  /** T1: keep tool_results from at least this many recent rounds intact. */
   microcompactKeepRecent?: number
   /** T2: enable tool-result deduplication. */
   dedupeToolResults?: boolean
-  /** T3: strip image/document blocks older than this many turns. */
+  /** T3: strip image/document blocks older than this many rounds. */
   agedMediaStripTurns?: number
+  /** T3.5: hard cap on media blocks per request (Anthropic API rejects >100). */
+  maxMediaPerRequest?: number
   /** T4: trigger summarization when rough tokens exceed this. */
   triggerTokens?: number
   /** T4: keep at least this many trailing messages verbatim. */
@@ -74,7 +84,7 @@ export interface SummarizationMiddlewareOptions {
 }
 
 export interface CompactionEvent {
-  tier: 'T1' | 'T2' | 'T3' | 'T4'
+  tier: 'T0' | 'T1' | 'T2' | 'T3' | 'T3.5' | 'T4'
   beforeTokens: number
   afterTokens: number
   /** Per-tier details (e.g. number of ToolMessages stubbed). */
@@ -104,6 +114,11 @@ export function createSummarizationMiddleware(
   const chunkFraction = clamp01(options.chunkFraction ?? 0.4)
   const dedupe = options.dedupeToolResults ?? true
   const summarize = options.summarize ?? heuristicSummary
+  const timeGapMs = (options.timeGapMicrocompactMinutes ?? 30) * 60_000
+  const maxMedia = options.maxMediaPerRequest ?? 100
+  // Track the last beforeModel timestamp in a closure so we can detect
+  // long idle gaps (cache cold) without depending on message timestamps.
+  let lastSeenAt = Date.now()
 
   return createMiddleware({
     name: 'CompactionMiddleware',
@@ -115,6 +130,30 @@ export function createSummarizationMiddleware(
       const events: CompactionEvent[] = []
       let messages = state.messages
       const before = roughTokenCount(messages)
+
+      // T0: time-gap microcompact. If the conversation has been idle long
+      // enough that the prompt cache is dead anyway, aggressively shrink
+      // the prefix BEFORE the request goes out.
+      const now = Date.now()
+      const idleGap = now - lastSeenAt
+      lastSeenAt = now
+      const aggressiveKeep = idleGap > timeGapMs && timeGapMs > 0 ? 1 : microKeep
+      if (aggressiveKeep < microKeep) {
+        const t0 = microcompact(messages, aggressiveKeep)
+        if (t0.changed) {
+          const after = roughTokenCount(t0.messages)
+          events.push({
+            tier: 'T0',
+            beforeTokens: before,
+            afterTokens: after,
+            details: {
+              stubbed: t0.stubbed,
+              idleGapMinutes: Math.round(idleGap / 60_000),
+            },
+          })
+          messages = t0.messages
+        }
+      }
 
       // T1: microcompact — proactive eviction of old tool_result bodies.
       const t1 = microcompact(messages, microKeep)
@@ -157,6 +196,21 @@ export function createSummarizationMiddleware(
           details: { stripped: t3.stripped },
         })
         messages = t3.messages
+      }
+
+      // T3.5: excess-media strip. Anthropic rejects requests with >100
+      // image/document content blocks. Drop oldest until we're under cap.
+      const t35 = stripExcessMedia(messages, maxMedia)
+      if (t35.changed) {
+        const tBefore = events.at(-1)?.afterTokens ?? before
+        const tAfter = roughTokenCount(t35.messages)
+        events.push({
+          tier: 'T3.5',
+          beforeTokens: tBefore,
+          afterTokens: tAfter,
+          details: { dropped: t35.dropped },
+        })
+        messages = t35.messages
       }
 
       // T4: summarize the oldest chunk when still over budget.
@@ -222,7 +276,7 @@ function microcompact(
   messages: BaseMessage[],
   keepRecent: number,
 ): { changed: boolean; messages: BaseMessage[]; stubbed: number } {
-  const cutoffIdx = recentTurnCutoff(messages, keepRecent)
+  const cutoffIdx = recentRoundCutoff(messages, keepRecent)
   let changed = false
   let stubbed = 0
   const out = messages.map((m, i) => {
@@ -286,7 +340,7 @@ function stripAgedMedia(
   messages: BaseMessage[],
   ageTurns: number,
 ): { changed: boolean; messages: BaseMessage[]; stripped: number } {
-  const cutoffIdx = recentTurnCutoff(messages, ageTurns)
+  const cutoffIdx = recentRoundCutoff(messages, ageTurns)
   let changed = false
   let stripped = 0
   const out = messages.map((m, i) => {
@@ -315,6 +369,66 @@ function stripAgedMedia(
     return new Ctor({ content: next })
   })
   return { changed, messages: out, stripped }
+}
+
+/**
+ * T3.5: excess-media strip.
+ *
+ * Anthropic enforces a hard cap of ~100 image/document blocks per request
+ * and returns a confusing error otherwise. We count media (including
+ * blocks nested inside `tool_result.content` arrays) and drop oldest
+ * first until we're under the cap. Recent visual context is preserved.
+ */
+function stripExcessMedia(
+  messages: BaseMessage[],
+  cap: number,
+): { changed: boolean; messages: BaseMessage[]; dropped: number } {
+  const positions: Array<{ msg: number; block: number }> = []
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i]!
+    if (!Array.isArray(msg.content)) continue
+    msg.content.forEach((part, blockIdx) => {
+      if (
+        part &&
+        typeof part === 'object' &&
+        'type' in part &&
+        ((part as { type: string }).type === 'image' ||
+          (part as { type: string }).type === 'document')
+      ) {
+        positions.push({ msg: i, block: blockIdx })
+      }
+    })
+  }
+  if (positions.length <= cap) {
+    return { changed: false, messages, dropped: 0 }
+  }
+  const toDrop = positions.length - cap
+  const dropSet = new Set<string>()
+  for (let i = 0; i < toDrop; i++) {
+    const p = positions[i]!
+    dropSet.add(`${p.msg}:${p.block}`)
+  }
+  const out = messages.map((m, msgIdx) => removeMediaBlocks(m, msgIdx, dropSet))
+  return { changed: true, messages: out, dropped: toDrop }
+}
+
+function removeMediaBlocks(
+  msg: BaseMessage,
+  msgIdx: number,
+  dropSet: Set<string>,
+): BaseMessage {
+  if (!Array.isArray(msg.content)) return msg
+  let mutated = false
+  const next = msg.content.flatMap((part, blockIdx) => {
+    if (dropSet.has(`${msgIdx}:${blockIdx}`)) {
+      mutated = true
+      return [{ type: 'text', text: '[media stripped: 100-block API cap]' }]
+    }
+    return [part]
+  })
+  if (!mutated) return msg
+  const Ctor = (msg as unknown as { constructor: new (args: { content: unknown }) => BaseMessage }).constructor
+  return new Ctor({ content: next })
 }
 
 /**
@@ -366,22 +480,6 @@ async function summarizeChunk(
     dropped: compactable.length,
     summaryChars: summaryText.length,
   }
-}
-
-/**
- * Index of the first message in the most recent `n` user turns. Anything
- * BEFORE this index is "old" (eligible for microcompact / aged-media strip).
- */
-function recentTurnCutoff(messages: BaseMessage[], n: number): number {
-  if (n <= 0) return messages.length
-  let count = 0
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i]?.getType() === 'human') {
-      count++
-      if (count >= n) return i
-    }
-  }
-  return 0
 }
 
 /**
@@ -481,5 +579,4 @@ export {
   dedupeToolMessages as _dedupeToolMessages,
   stripAgedMedia as _stripAgedMedia,
   nextSafeBoundary as _nextSafeBoundary,
-  recentTurnCutoff as _recentTurnCutoff,
 }

@@ -266,12 +266,17 @@ try { await agent.invoke({ messages }) } finally { await mcp.stop() }
 The official langchain `summarizationMiddleware` is a one-trick blunt instrument — it just LLM-summarizes when context fills up. cc actually runs a graduated, lossless-first cascade. We replicate the policy:
 
 ```
-T1 microcompact         every turn   · lossless     · old ToolMessage bodies → "[evicted; ...]" stub (Read can refetch)
-T2 dedup tool_results   every turn   · lossless     · identical tool_results → "[same as tool_use_<id>]"
-T3 aged-media strip     every turn   · recoverable  · image/PDF blocks past N turns → text stub
-T4 summarization        on threshold · LOSSY        · fold oldest chunk into a SystemMessage; tool_use/tool_result pairs preserved
-T5 pinning              any tier     · —            · pinMessage(msg) protects from every tier
+T0 time-gap microcompact   on long idle   · lossless     · cache cold anyway → keep last 1 round, stub the rest
+T1 microcompact            every turn     · lossless     · old ToolMessage bodies → "[evicted; ...]" stub (Read can refetch)
+T2 dedup tool_results      every turn     · lossless     · identical tool_results → "[same as tool_use_<id>]"
+T3 aged-media strip        every turn     · recoverable  · image/PDF blocks past N rounds → text stub
+T3.5 excess-media strip    every turn     · recoverable  · drop oldest media when total > 100 (Anthropic API hard cap)
+T4 summarization           on threshold   · LOSSY        · fold oldest chunk into a SystemMessage; tool_use/tool_result pairs preserved
+T5 pinning                 any tier       · —            · pinMessage(msg) protects from every tier
++ pairing-repair (always)  before model   · structural   · synthesize placeholders for orphan tool_use, drop orphan tool_result, dedup ids
 ```
+
+Round boundary: AI message-id changes (cc style), so streaming chunks share a round and single-prompt agentic sessions still group correctly. `recentRoundCutoff(n)` instead of "last N user turns" — fixes the deepagents-style use case where one human prompt produces many API rounds.
 
 After any tier fires, a `<system-reminder name="compaction-applied">` block is appended to the next user message so the model knows what was preserved.
 
@@ -311,7 +316,7 @@ Boundary safety: T4 never cuts between an `AIMessage` with `tool_calls` and the 
 
 ```bash
 $ bun test
- 253 pass
+ 280 pass
  0 fail
 ```
 

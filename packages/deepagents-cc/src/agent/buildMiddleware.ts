@@ -30,6 +30,7 @@ import {
   createDenialTrackingMiddleware,
   createErrorRetryGuardMiddleware,
   createHooksMiddleware,
+  createPairingRepairMiddleware,
   createPermissionModeMiddleware,
   createPromptCacheMiddleware,
   createResultEvictionMiddleware,
@@ -73,6 +74,8 @@ export interface BuildMiddlewareInput {
   reminders?: Reminder[]
   summarization?: false | SummarizationMiddlewareOptions
   promptCache?: false | PromptCacheMiddlewareOptions
+  /** When true, pairingRepair throws on orphan/duplicate. */
+  strictPairing?: boolean
   extraMiddleware?: AgentMiddleware[]
 }
 
@@ -171,6 +174,22 @@ export function buildMiddleware(input: BuildMiddlewareInput): AgentMiddleware[] 
     )
   }
 
+  // Context-bloat advisor (P2). Fires only after the conversation has
+  // grown large enough that a per-tool attribution is informative.
+  let liveMessagesForBloat: Parameters<typeof ccReminders.contextBloat>[0] = () => []
+  reminders.push(
+    ccReminders.contextBloat(() => liveMessagesForBloat()),
+  )
+  chain.push(
+    createMiddleware({
+      name: 'BloatSnapshotMiddleware',
+      beforeModel: (state: { messages: Array<{ content: unknown }> }) => {
+        liveMessagesForBloat = () => state.messages as ReturnType<typeof liveMessagesForBloat>
+        return undefined
+      },
+    }),
+  )
+
   if (input.reminders) reminders.push(...input.reminders)
 
   chain.push(createContextEngineeringMiddleware({ reminders }))
@@ -178,6 +197,12 @@ export function buildMiddleware(input: BuildMiddlewareInput): AgentMiddleware[] 
   if (input.summarization !== false) {
     chain.push(createSummarizationMiddleware(input.summarization ?? {}))
   }
+
+  // Pairing repair runs AFTER compaction so it can patch any orphan
+  // tool_use / tool_result blocks the compactor produced — and BEFORE
+  // prompt cache so the cache markers don't land on soon-to-be-replaced
+  // messages.
+  chain.push(createPairingRepairMiddleware({ strict: input.strictPairing }))
 
   if (input.promptCache !== false) {
     chain.push(createPromptCacheMiddleware(input.promptCache ?? {}))

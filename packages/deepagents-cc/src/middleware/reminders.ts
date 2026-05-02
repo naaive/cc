@@ -15,6 +15,11 @@ import type { SkillActivator } from '../skills/activation.js'
 import { readSkillBody, type SkillMetadata } from '../skills/loader.js'
 import type { FileStateCache } from '../tools/fsUtils.js'
 import type { MonitorRegistry } from '../tools/monitor.js'
+import {
+  analyzeContextBloat,
+  type AnalyzeBloatOptions,
+  type BloatMessage,
+} from '../lib/contextBloat.js'
 
 export interface ReminderContext {
   state: Record<string, unknown>
@@ -224,6 +229,34 @@ export const ccReminders = {
             return `Monitor ${j.id} (${j.description}) ${j.status} after ${dur}, exit ${j.exitCode ?? 'unknown'}. Read ${j.outputPath} for output.`
           })
           .join('\n')
+      },
+    }
+  },
+
+  /**
+   * Context-bloat advisor. Each turn, attribute rough tokens to each tool;
+   * when one tool dominates the budget, emit a typed suggestion ("Bash
+   * output is 32% — pipe through head"). Fires only when total context
+   * exceeds `minTotalTokens` (default 20k) so we don't pester early-session.
+   */
+  contextBloat(
+    getMessages: () => BloatMessage[],
+    options: AnalyzeBloatOptions & { minTotalTokens?: number } = {},
+  ): Reminder {
+    const minTotal = options.minTotalTokens ?? 20_000
+    let lastSummary = ''
+    return {
+      name: 'context-bloat',
+      shouldFire() {
+        const messages = getMessages()
+        const analysis = analyzeContextBloat(messages, options)
+        if (analysis.totalTokens < minTotal) return null
+        if (analysis.suggestions.length === 0) return null
+        const lines = analysis.suggestions.map(s => `- [${s.severity}] ${s.message}`)
+        const summary = lines.join('\n')
+        if (summary === lastSummary) return null
+        lastSummary = summary
+        return `Context bloat detected (~${Math.round(analysis.totalTokens / 1000)}K tokens):\n${summary}`
       },
     }
   },

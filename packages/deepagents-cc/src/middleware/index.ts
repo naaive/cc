@@ -35,6 +35,11 @@ export {
   type CompactionEvent,
   type SummarizationMiddlewareOptions,
 } from './summarization.js'
+export { autoPinFirstByRole } from './compactionPure.js'
+export {
+  createErrorRetryGuardMiddleware,
+  type ErrorRetryGuardOptions,
+} from './errorRetryGuard.js'
 export {
   createPromptCacheMiddleware,
   type PromptCacheMiddlewareOptions,

@@ -13,6 +13,9 @@
 import { tool, HumanMessage } from 'langchain'
 import { z } from 'zod/v4'
 import { TOOL_DESCRIPTIONS, TOOL_NAMES, type ToolName } from './ccToolNames.js'
+import { defaultLargeResultSummary } from './largeResultSummary.js'
+
+export { defaultLargeResultSummary }
 
 export interface SubAgent {
   name: string
@@ -33,6 +36,19 @@ export type SubAgentFactory = (sub: SubAgent) => {
 export interface AgentToolOptions {
   subagents: SubAgent[]
   factory: SubAgentFactory
+  /**
+   * When the sub-agent's final reply is longer than this many characters,
+   * compress it before returning to the parent conversation. cc does this
+   * so a sub-agent that produces a 50KB report doesn't dump 50KB into the
+   * parent context — the parent just sees the gist plus a pointer to the
+   * full text via the result store.
+   */
+  maxResultChars?: number
+  /**
+   * Optional summarizer applied when `maxResultChars` is exceeded. Default
+   * is a "head + tail with marker" truncation (cheap, no LLM call).
+   */
+  summarizeLargeResult?: (text: string) => Promise<string> | string
 }
 
 export function createAgentTool(options: AgentToolOptions) {
@@ -55,6 +71,10 @@ export function createAgentTool(options: AgentToolOptions) {
 
   const description = buildAgentDescription(subagents)
 
+  const maxResultChars = options.maxResultChars ?? 8_000
+  const summarizeLargeResult =
+    options.summarizeLargeResult ?? defaultLargeResultSummary
+
   return tool(
     async (input: z.infer<typeof schema>) => {
       const sub = subagents.find(s => s.name === input.subagent_type)
@@ -64,7 +84,9 @@ export function createAgentTool(options: AgentToolOptions) {
         messages: [new HumanMessage(input.prompt)],
       })
       const last = result.messages?.at(-1)
-      return messageToText(last) || '(no reply)'
+      const text = messageToText(last) || '(no reply)'
+      if (text.length <= maxResultChars) return text
+      return await summarizeLargeResult(text)
     },
     {
       name: TOOL_NAMES.Agent,

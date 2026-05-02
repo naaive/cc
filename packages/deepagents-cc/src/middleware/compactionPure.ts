@@ -63,6 +63,33 @@ export function stringifyContent(msg: MessageWithContent): string {
   return ''
 }
 
+/**
+ * Auto-pin the first message of a given role. Useful for the common
+ * "the first user message IS the spec" pattern: pin it so it survives
+ * every compaction tier without the host having to call `pinMessage`
+ * manually.
+ *
+ * Returns the messages array unchanged (mutates the matched message in
+ * place). Pure — works on any message-shaped object.
+ */
+export function autoPinFirstByRole<
+  M extends MaybePinnableMessage & { getType?: () => string; _getType?: () => string },
+>(messages: readonly M[], role: 'human' | 'system' | 'ai' = 'human'): readonly M[] {
+  for (const m of messages) {
+    const type =
+      typeof m.getType === 'function'
+        ? m.getType()
+        : typeof m._getType === 'function'
+          ? m._getType()
+          : undefined
+    if (type === role) {
+      pinMessage(m)
+      break
+    }
+  }
+  return messages
+}
+
 /** djb2 — small fast non-cryptographic hash. Used for tool-result dedup. */
 export function djb2(s: string): string {
   let h = 5381

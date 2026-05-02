@@ -80,9 +80,11 @@ import { getOutputStyle, formatOutputStyleSection, type OutputStyle } from './ou
 import type { PermissionRule } from './permissionRules.js'
 import type { MultiServerMCPClient } from './mcp/index.js'
 import {
+  autoPinFirstByRole,
   ccReminders,
   createContextEngineeringMiddleware,
   createDenialTrackingMiddleware,
+  createErrorRetryGuardMiddleware,
   createHooksMiddleware,
   createPermissionModeMiddleware,
   createPromptCacheMiddleware,
@@ -128,6 +130,17 @@ export interface CreateClaudeCodeAgentParams {
   evictResultsAboveBytes?: number
   /** Enable tool denial tracking middleware (default true). */
   trackDenials?: boolean
+  /**
+   * Enable the error-retry guard. After the model retries the same call
+   * with the same error, return a "you just tried this" stub instead of
+   * actually re-running the tool. Default true.
+   */
+  errorRetryGuard?: boolean | { haltAfterConsecutive?: number }
+  /**
+   * Auto-pin the first user message so it survives every compaction tier.
+   * Useful for the "first prompt is the spec" pattern. Default false.
+   */
+  autoPinFirstUserMessage?: boolean
   /**
    * User skill directories. When set, DiscoverSkills + Skill tools are
    * registered automatically and skills are listed in the system prompt.
@@ -428,6 +441,17 @@ export function createClaudeCodeAgent(
     middleware.push(createDenialTrackingMiddleware())
   }
 
+  // Error-retry guard — short-circuit identical-after-error retries plus
+  // a halt threshold for runaway failures. Sits next to denial tracking
+  // because they share the fingerprinting strategy.
+  if (params.errorRetryGuard !== false) {
+    middleware.push(
+      createErrorRetryGuardMiddleware(
+        typeof params.errorRetryGuard === 'object' ? params.errorRetryGuard : {},
+      ),
+    )
+  }
+
   // Result eviction — wraps tool calls AFTER they run, swapping huge
   // outputs for storage-id stubs (model fetches them back via Read).
   if (resultStore) {
@@ -435,6 +459,22 @@ export function createClaudeCodeAgent(
       createResultEvictionMiddleware({
         store: resultStore,
         evictBytes: params.evictResultsAboveBytes,
+      }),
+    )
+  }
+
+  // Auto-pin the first user message so it survives every compaction tier.
+  if (params.autoPinFirstUserMessage) {
+    middleware.push(
+      createMiddleware({
+        name: 'AutoPinFirstUserMessage',
+        beforeAgent: (state: { messages: unknown[] }) => {
+          autoPinFirstByRole(
+            state.messages as Parameters<typeof autoPinFirstByRole>[0],
+            'human',
+          )
+          return undefined
+        },
       }),
     )
   }

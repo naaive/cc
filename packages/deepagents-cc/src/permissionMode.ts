@@ -24,28 +24,23 @@ export type PermissionMode = (typeof PERMISSION_MODES)[number]
  * is unrecognized in plan mode, deny it.
  */
 export const WRITE_TOOL_NAMES: ReadonlySet<string> = new Set([
-  // deepagents builtins
   'write_file',
   'edit_file',
-  // cc additions
   'bash',
   'exit_plan_mode',
 ])
 
 export const READ_TOOL_NAMES: ReadonlySet<string> = new Set([
-  // deepagents builtins
   'read_file',
   'ls',
   'glob',
   'grep',
-  // cc additions
   'web_fetch',
   'web_search',
   'enter_plan_mode',
   'ask_user_question',
-  // deepagents subagent / planning
-  'task',
-  'write_todos', // toggling todos is harmless metadata
+  'task', // sub-agent calls inherit their own permission mode
+  'write_todos', // toggling todos is metadata; harmless in plan mode
 ])
 
 export interface PermissionDecision {

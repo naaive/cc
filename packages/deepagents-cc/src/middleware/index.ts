@@ -20,3 +20,8 @@ export {
   type ShellHook,
   type HooksMiddlewareOptions,
 } from './hooks.js'
+export {
+  createSummarizationMiddleware,
+  roughTokenCount,
+  type SummarizationMiddlewareOptions,
+} from './summarization.js'

@@ -1,9 +1,9 @@
 {
-  "name": "@claude-code-best/deepagents-cc",
+  "name": "@claude-code-best/cc-on-langchain",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Claude Code, rebuilt on top of LangChain + deepagents — env detection, CLAUDE.md, plan mode, permissions, hooks, system reminders, and the missing tools (bash, web_fetch, web_search, ask_user_question, enter_plan_mode, exit_plan_mode).",
+  "description": "Claude Code, rebuilt directly on LangChain — real-disk filesystem tools, persistent-shell bash, ripgrep-backed grep, plan/permission modes, hooks, system reminders, settings, slash commands.",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
@@ -25,7 +25,6 @@
     "@langchain/anthropic": "^0.3.0",
     "@langchain/core": "^0.3.0",
     "@langchain/langgraph": "^0.2.0",
-    "deepagents": "^0.1.0",
     "langchain": "^0.3.0",
     "yaml": "^2.8.3",
     "zod": "^3.25.0"

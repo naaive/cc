@@ -1,31 +1,29 @@
 /**
- * @claude-code-best/deepagents-cc
+ * @claude-code-best/cc-on-langchain
  *
- * Claude Code, rebuilt on top of LangChain + deepagents.
+ * Claude Code, rebuilt directly on LangChain.
  *
- * What this package adds on top of `deepagents`:
- *  - cc-style system prompt (identity, tone, tool-use policy, env block)
- *  - CLAUDE.md / AGENTS.md auto-discovery and injection
- *  - cc-only tools: bash, web_fetch, web_search, enter_plan_mode,
- *    exit_plan_mode, ask_user_question
- *  - Permission-mode middleware (default / plan / acceptEdits / bypassPermissions)
- *  - System-reminder middleware (cc's <system-reminder> injection mechanism)
- *  - Hooks middleware (SessionStart / UserPromptSubmit / PreToolUse /
- *    PostToolUse / Stop), supporting both inline JS and shell-command hooks
- *  - Settings loader that merges ~/.claude/settings.json,
- *    .claude/settings.json, .claude/settings.local.json
- *  - Slash command parser plus the standard `/clear /help /init /compact
- *    /memory /mode` set
+ * No deepagents wrapper — its filesystem lives in agent state and its bash
+ * tool is a one-shot spawn, neither of which fits cc's contract. We build
+ * the full surface from scratch on top of `langchain.createAgent`:
  *
- * Usage:
- * ```ts
- * import { createClaudeCodeAgent } from "@claude-code-best/deepagents-cc";
- *
- * const { agent } = createClaudeCodeAgent();
- * const result = await agent.invoke({
- *   messages: [{ role: "user", content: "Refactor src/foo.ts" }]
- * });
- * ```
+ *  - Real-disk filesystem tools with mtime-tracked stale-edit detection
+ *    (read_file, write_file, edit_file with old_string/new_string semantics,
+ *    ls, glob, grep with ripgrep autodetection).
+ *  - Persistent-shell bash tool (`cd`, env, exports survive across calls).
+ *  - Planning + delegation (write_todos, task with recursive sub-agents).
+ *  - cc-style system prompt (identity, tone, tool policy, env block,
+ *    CLAUDE.md / AGENTS.md auto-injection).
+ *  - Plan / permission mode middleware (default / acceptEdits / plan /
+ *    bypassPermissions) with read/write tool classification.
+ *  - <system-reminder> middleware (stale-todo, plan-mode-active, …).
+ *  - Hooks middleware (SessionStart / UserPromptSubmit / Pre+PostToolUse /
+ *    Stop) with both inline JS and shell-command hooks.
+ *  - Token-budget summarization middleware with pluggable summarizer.
+ *  - .claude/settings.json hierarchy loader (user / project / local).
+ *  - Slash command parser plus the standard set (/clear /help /init
+ *    /compact /memory /mode).
+ *  - `ccx` CLI (headless and interactive REPL).
  */
 
 export {

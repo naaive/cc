@@ -82,3 +82,29 @@ export {
   writeTextFile,
   type FileStateCache,
 } from './fsUtils.js'
+
+// Context-engineering primitives.
+export {
+  DeferredToolRegistry,
+  createToolSearchTool,
+  type DeferredToolMeta,
+} from './toolSearch.js'
+export {
+  buildEvictionStub,
+  createInMemoryResultStore,
+  parseStorageUri,
+  shouldEvict,
+  storageUri,
+  STORAGE_SCHEME,
+  TOOLS_EXCLUDED_FROM_EVICTION,
+  DEFAULT_EVICT_BYTES,
+  type EvictionPolicy,
+  type ResultStore,
+  type StoredResult,
+} from './resultStore.js'
+export {
+  createTruncationPolicy,
+  type TruncationDecision,
+  type TruncationPolicy,
+} from './truncationPolicy.js'
+export { FILE_UNCHANGED_STUB } from './readFile.js'

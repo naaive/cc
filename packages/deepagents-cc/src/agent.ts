@@ -19,6 +19,7 @@
 import {
   anthropicPromptCachingMiddleware,
   createAgent,
+  createMiddleware,
   type AgentMiddleware,
 } from 'langchain'
 import type {
@@ -42,28 +43,41 @@ import {
   createExitPlanModeTool,
   createGlobTool,
   createGrepTool,
+  createInMemoryResultStore,
   createNotebookEditTool,
   createReadTool,
+  createToolSearchTool,
   createTodoWriteTool,
   createWebFetchTool,
   createWebSearchTool,
   createWriteTool,
+  DeferredToolRegistry,
   makeFileStateCache,
   PersistentShell,
   TOOL_NAMES,
   type AskUserQuestionResponder,
   type FileStateCache,
+  type ResultStore,
   type SubAgent,
   type ToolName,
   type WebSearchImpl,
 } from './tools/index.js'
 import {
+  createDiscoverSkillsTool,
+  createSkillTool,
+  listSkills,
+  type SkillMetadata,
+} from './skills/index.js'
+import {
   ccReminders,
   createContextEngineeringMiddleware,
+  createDenialTrackingMiddleware,
   createHooksMiddleware,
   createPermissionModeMiddleware,
   createPromptCacheMiddleware,
+  createResultEvictionMiddleware,
   createSummarizationMiddleware,
+  roughTokenCount,
   type HookConfig,
   type PromptCacheMiddlewareOptions,
   type Reminder,
@@ -97,16 +111,49 @@ export interface CreateClaudeCodeAgentParams {
   jobRegistry?: BackgroundJobRegistry
   summarization?: SummarizationMiddlewareOptions | false
   promptCache?: PromptCacheMiddlewareOptions | false
+  /** Tool result eviction store (defaults to in-memory). Pass false to disable. */
+  resultStore?: ResultStore | false
+  /** Bytes threshold above which a tool result is evicted to the store. */
+  evictResultsAboveBytes?: number
+  /** Enable tool denial tracking middleware (default true). */
+  trackDenials?: boolean
+  /**
+   * User skill directories. When set, DiscoverSkills + Skill tools are
+   * registered automatically and skills are listed in the system prompt.
+   */
+  skills?: {
+    userSkillsDir?: string | null
+    projectSkillsDir?: string | null
+    /** Inline skills (already-parsed metadata, e.g. for tests). */
+    inline?: SkillMetadata[]
+  }
+  /**
+   * Tools to register as **deferred** — only their NAMES land in the system
+   * prompt; the model loads their schemas via ToolSearch on demand. Pass
+   * the same `StructuredTool` instances you'd otherwise pass via `tools`.
+   */
+  deferredTools?: StructuredTool[]
+  /** Auto-compact pre-warning thresholds (rough tokens). */
+  autoCompactWarning?: {
+    warnAt?: number
+    triggerAt?: number
+  } | false
 }
 
 export interface ClaudeCodeAgentBundle {
   agent: ReturnType<typeof createAgent>
   settings: Settings
   env: EnvironmentInfo
-  /** Tool names actually wired into the agent. */
+  /** Tool names actually wired into the agent (active surface). */
   toolNames: string[]
+  /** Names of tools the model must fetch via ToolSearch before calling. */
+  deferredToolNames: string[]
+  /** Loaded skills (empty if none configured). */
+  skills: SkillMetadata[]
   shell: PersistentShell
   jobRegistry: BackgroundJobRegistry
+  resultStore: ResultStore | null
+  deferredRegistry: DeferredToolRegistry | null
 }
 
 export function createClaudeCodeAgent(
@@ -123,16 +170,53 @@ export function createClaudeCodeAgent(
 
   const env = collectEnvironment({ cwd, modelId })
   const claudeMd = params.skipClaudeMd ? [] : loadClaudeMd({ cwd })
-  const systemPrompt = buildSystemPrompt({
-    env,
-    claudeMd,
-    appendix: params.systemPromptAppendix,
-    agentSdk: params.agentSdk,
-  })
 
   const fileStateCache = params.fileStateCache ?? makeFileStateCache()
   const shell = params.shell ?? new PersistentShell({ cwd })
   const jobRegistry = params.jobRegistry ?? new BackgroundJobRegistry()
+  const resultStore =
+    params.resultStore === false ? null : (params.resultStore ?? createInMemoryResultStore())
+
+  // Load skills if any source is configured.
+  const skills: SkillMetadata[] =
+    params.skills
+      ? [
+          ...(params.skills.inline ?? []),
+          ...listSkills({
+            userSkillsDir: params.skills.userSkillsDir,
+            projectSkillsDir: params.skills.projectSkillsDir,
+          }),
+        ]
+      : []
+
+  // Build a per-session deferred tool registry. Hosts seed it via
+  // `deferredTools`; we always register the Skill body loader as deferred
+  // so it doesn't pollute the main tool list.
+  const deferredRegistry =
+    params.deferredTools && params.deferredTools.length > 0
+      ? new DeferredToolRegistry()
+      : null
+  if (deferredRegistry && params.deferredTools) {
+    deferredRegistry.registerAll(params.deferredTools)
+  }
+
+  // Build the system prompt — appendix carries the deferred-tool block
+  // and the skill listing so they live alongside the env section.
+  const promptAppendixParts: string[] = []
+  if (params.systemPromptAppendix) promptAppendixParts.push(params.systemPromptAppendix)
+  if (deferredRegistry) {
+    const block = deferredRegistry.toSystemPromptBlock()
+    if (block) promptAppendixParts.push(block)
+  }
+  if (skills.length > 0) {
+    promptAppendixParts.push(buildSkillsListing(skills))
+  }
+  const systemPrompt = buildSystemPrompt({
+    env,
+    claudeMd,
+    appendix: promptAppendixParts.length > 0 ? promptAppendixParts.join('\n\n') : undefined,
+    agentSdk: params.agentSdk,
+  })
 
   const disabled = new Set<ToolName>(params.disable ?? [])
   const allowed = settings.allowedTools ? new Set(settings.allowedTools) : null
@@ -156,7 +240,13 @@ export function createClaudeCodeAgent(
     if (isEnabled(TOOL_NAMES.KillShell)) ccTools.push(bundle.killShell as StructuredTool)
   }
 
-  if (isEnabled(TOOL_NAMES.Read)) ccTools.push(createReadTool({ fileStateCache }))
+  if (isEnabled(TOOL_NAMES.Read))
+    ccTools.push(
+      createReadTool({
+        fileStateCache,
+        resultStore: resultStore ?? undefined,
+      }),
+    )
   if (isEnabled(TOOL_NAMES.Write)) ccTools.push(createWriteTool({ fileStateCache }))
   if (isEnabled(TOOL_NAMES.Edit)) ccTools.push(createEditTool({ fileStateCache }))
   if (isEnabled(TOOL_NAMES.NotebookEdit)) ccTools.push(createNotebookEditTool())
@@ -205,6 +295,21 @@ export function createClaudeCodeAgent(
     )
   }
 
+  // ToolSearch — only when there are deferred tools to search for.
+  if (deferredRegistry && deferredRegistry.size() > 0) {
+    ccTools.push(createToolSearchTool(deferredRegistry) as StructuredTool)
+  }
+
+  // DiscoverSkills + Skill — only when skills are present.
+  if (skills.length > 0) {
+    ccTools.push(
+      createDiscoverSkillsTool({ getSkills: () => skills }) as StructuredTool,
+    )
+    ccTools.push(
+      createSkillTool({ getSkills: () => skills }) as StructuredTool,
+    )
+  }
+
   // Collision check vs user tools.
   const userTools = params.tools ?? []
   const userNames = new Set(userTools.map(t => t.name))
@@ -235,16 +340,60 @@ export function createClaudeCodeAgent(
     }),
   )
 
-  middleware.push(
-    createContextEngineeringMiddleware({
-      reminders: [
-        ccReminders.todoState(),
-        ccReminders.todoStaleNudge(),
-        ccReminders.planModeActive(),
-        ...(params.reminders ?? []),
-      ],
-    }),
-  )
+  // Denial tracking — must wrap tool calls before downstream middleware so
+  // it can short-circuit identical retries.
+  if (params.trackDenials !== false) {
+    middleware.push(createDenialTrackingMiddleware())
+  }
+
+  // Result eviction — wraps tool calls AFTER they run, swapping huge
+  // outputs for storage-id stubs (model fetches them back via Read).
+  if (resultStore) {
+    middleware.push(
+      createResultEvictionMiddleware({
+        store: resultStore,
+        evictBytes: params.evictResultsAboveBytes,
+      }),
+    )
+  }
+
+  // Build the reminder set: cc defaults + autocompact warning + custom.
+  const reminders = [
+    ccReminders.todoState(),
+    ccReminders.todoStaleNudge(),
+    ccReminders.planModeActive(),
+  ]
+  if (params.autoCompactWarning !== false) {
+    const warnAt = params.autoCompactWarning?.warnAt ?? 60_000
+    const triggerAt =
+      params.autoCompactWarning?.triggerAt ??
+      (params.summarization !== false
+        ? params.summarization?.triggerTokens ?? 80_000
+        : 80_000)
+    // The reminder needs the live message list to estimate tokens.
+    // We close over a getter that reads from the live state via the
+    // ContextEngineeringMiddleware's `state` argument — see below.
+    let liveTokens = 0
+    reminders.push(
+      ccReminders.autoCompactWarning(() => liveTokens, warnAt, triggerAt),
+    )
+    // Track liveTokens by piggy-backing on the prompt-cache middleware's
+    // pre-model hook: any beforeModel handler runs after this snapshotter.
+    middleware.push(
+      createMiddleware({
+        name: 'TokenSnapshotMiddleware',
+        beforeModel: (state: { messages: Array<{ content: unknown }> }) => {
+          // roughTokenCount works on BaseMessage[]; we pass it the raw
+          // structural shape, which is enough for char-counting.
+          liveTokens = roughTokenCount(state.messages as Parameters<typeof roughTokenCount>[0])
+          return undefined
+        },
+      }),
+    )
+  }
+  reminders.push(...(params.reminders ?? []))
+
+  middleware.push(createContextEngineeringMiddleware({ reminders }))
 
   if (params.summarization !== false) {
     middleware.push(createSummarizationMiddleware(params.summarization ?? {}))
@@ -278,9 +427,24 @@ export function createClaudeCodeAgent(
     settings,
     env,
     toolNames: [...ccTools.map(t => t.name), ...userTools.map(t => t.name)],
+    deferredToolNames: deferredRegistry
+      ? deferredRegistry.list().map(m => m.tool.name)
+      : [],
+    skills,
     shell,
     jobRegistry,
+    resultStore,
+    deferredRegistry,
   }
+}
+
+function buildSkillsListing(skills: SkillMetadata[]): string {
+  const lines = skills.map(s => `  - ${s.name} [${s.source}]: ${s.description}`)
+  return `# Skills
+
+The following agent skills are installed. Each is a self-contained instruction module the user has chosen to make available. Call DiscoverSkills to filter, or Skill { name } to load one's full body.
+
+${lines.join('\n')}`
 }
 
 function mergeHookConfigs(

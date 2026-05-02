@@ -16,6 +16,13 @@ Tool names, system prompt structure, prompt-cache strategy, system-reminder inje
 | **System reminders**   | `<system-reminder>` blocks injected on every turn for: full todo list (re-injected fresh every turn — that's how cc keeps todo state from scrolling off), todo-stale nudge, plan-mode active banner.             |
 | **Permission modes**   | `default` / `acceptEdits` / `plan` / `bypassPermissions`. Plan mode blocks every cc-classified write tool plus every unknown tool.                                                                               |
 | **Hooks**              | 5 events: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`. Inline JS or shell-command hooks.                                                                                             |
+| **Deferred tools**     | `ToolSearch` loads schemas for tools the model knows by name only. The system prompt lists deferred-tool names; full JSONSchemas are returned on demand. Saves ~k tokens per request when many tools are present. |
+| **File-unchanged stub** | Re-`Read`ing a file whose mtime hasn't changed returns a one-line stub directing the model to refer back to the earlier tool result. Identical to cc's `FILE_UNCHANGED_STUB`.                                  |
+| **Tool result eviction** | Tool outputs above ~32KB are stashed in a `ResultStore`; the model sees a `[evicted; ${size}KB stored as ${id} — Read ccx-store://${id}]` stub and can pull the full content back via Read on demand.        |
+| **Per-tool truncation** | Centralized policy: Grep/Glob/Bash truncate inline + emit "refine your query"; Read truncates + emits "use a higher offset"; everything else falls back to a generic hint.                                     |
+| **Skills**             | Anthropic Agent Skills format. `~/.claude/skills/<name>/SKILL.md` and `<repo>/.claude/skills/<name>/SKILL.md` are loaded (project shadows user). The `DiscoverSkills` and `Skill` tools expose them on demand. |
+| **Denial tracking**    | When a tool call gets denied (plan-mode block, hook block, user reject), we fingerprint the call and short-circuit identical retries with "you already tried this; pick a different approach".                |
+| **Auto-compact warning** | A reminder fires once when the conversation crosses ~75% of the summarization trigger, telling the model to wrap up loose ends before history collapses.                                                      |
 | **Settings**           | `~/.claude/settings.json` + `<repo>/.claude/settings.json` + `<repo>/.claude/settings.local.json`, merged in that order.                                                                                         |
 | **Read/Edit/Write**    | Real disk. `Read` returns `cat -n` line-numbered output and tracks mtime. `Edit` requires a prior `Read` of the file (stale-edit guard) and rejects non-unique `old_string` unless `replace_all=true`. `Write` is atomic. |
 | **Bash**               | Persistent shell — `cd`, exports, shell options carry across calls. `run_in_background: true` spawns a detached child whose stdout/stderr the model can poll with `BashOutput` and stop with `KillShell`.        |
@@ -161,11 +168,36 @@ ccx — Claude Code on LangChain. Type /help for commands.
 [plan] > sketch the refactor for the auth module
 ```
 
+## Context engineering — what cc does and we copy
+
+| Mechanism                  | Where to look                                                                |
+| -------------------------- | ---------------------------------------------------------------------------- |
+| `<system-reminder>` blocks | `middleware/contextEngineering.ts` + `middleware/reminders.ts`               |
+| Per-turn todo re-injection | `ccReminders.todoState` (full list, every turn)                              |
+| Plan-mode banner           | `ccReminders.planModeActive`                                                 |
+| Stale-todo nudge           | `ccReminders.todoStaleNudge`                                                 |
+| Auto-compact pre-warning   | `ccReminders.autoCompactWarning(getTokens, warnAt, triggerAt)`               |
+| Token-budget summarization | `middleware/summarization.ts` (pluggable LLM summarizer)                     |
+| Tool-result eviction       | `middleware/resultEviction.ts` + `tools/resultStore.ts`                      |
+| File-unchanged stub        | `tools/readFile.ts` (`FILE_UNCHANGED_STUB`)                                  |
+| Per-tool truncation policy | `tools/truncationPolicy.ts`                                                  |
+| Deferred-tool registry     | `tools/deferredRegistry.ts` + `tools/toolSearch.ts`                          |
+| Tool-denial tracking       | `middleware/denialTracking.ts`                                               |
+| Skills (Agent Skills spec) | `skills/loader.ts` + `skills/skillTool.ts`                                   |
+| 4-breakpoint prompt cache  | `middleware/promptCache.ts` + `prompt.ts#buildCacheableSystemBlocks`         |
+
+Wiring is automatic — `createClaudeCodeAgent` plugs every layer into the middleware chain in cc's order:
+
+```
+hooks → permissionMode → denialTracking → resultEviction →
+[tokenSnapshot] → contextEngineering → summarization → promptCache → anthropicCache
+```
+
 ## Tests
 
 ```bash
 $ bun test
- 111 pass
+ 157 pass
  0 fail
 ```
 

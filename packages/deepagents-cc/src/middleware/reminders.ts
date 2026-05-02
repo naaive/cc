@@ -105,6 +105,39 @@ export const ccReminders = {
       },
     }
   },
+
+  /**
+   * Auto-compact pre-warning. Fires when the conversation's rough token
+   * count exceeds `warnAt` but is still under the summarization trigger.
+   * Lets the model know it should wrap up loose ends or write findings to
+   * disk before history collapses into a summary.
+   *
+   * `getRoughTokens` is injected so the reminder doesn't have to import
+   * langchain to compute its own estimate.
+   */
+  autoCompactWarning(
+    getRoughTokens: () => number,
+    warnAt: number,
+    triggerAt: number,
+  ): Reminder {
+    let warned = false
+    return {
+      name: 'auto-compact-warning',
+      shouldFire() {
+        const tokens = getRoughTokens()
+        if (tokens < warnAt) {
+          warned = false
+          return null
+        }
+        if (tokens >= triggerAt) return null // summarization is about to fire anyway
+        if (warned) return null
+        warned = true
+        const used = Math.round(tokens / 1000)
+        const cap = Math.round(triggerAt / 1000)
+        return `Conversation is ~${used}K tokens (compaction triggers at ~${cap}K). Wrap up open threads, persist important findings to disk via Write or Edit, and prefer concise replies until then.`
+      },
+    }
+  },
 }
 
 export type CCReminderFactory = typeof ccReminders

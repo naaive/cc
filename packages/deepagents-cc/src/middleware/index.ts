@@ -36,3 +36,13 @@ export {
   createPromptCacheMiddleware,
   type PromptCacheMiddlewareOptions,
 } from './promptCache.js'
+export {
+  createResultEvictionMiddleware,
+  type ResultEvictionMiddlewareOptions,
+} from './resultEviction.js'
+export {
+  createDenialTrackingMiddleware,
+  denialFingerprint,
+  stableJson,
+  type DenialTrackingMiddlewareOptions,
+} from './denialTracking.js'

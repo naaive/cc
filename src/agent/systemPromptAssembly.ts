@@ -1,19 +1,35 @@
 /**
- * System-prompt assembly.
+ * System-prompt assembly — the *only* place that decides what the model
+ * actually sees.
  *
- * Composes the appendix that follows the base prompt:
- *   - user-supplied appendix
- *   - deferred-tool listing (when ToolSearch is enabled)
- *   - skill listing (when skills are loaded)
- *   - output style preset
+ * Layout (top to bottom):
+ *   1. Identity prefix          — "You are Forge, …" (or embedded variant)
+ *   2. Intro block              — interactive-agent posture, URL guard
+ *   3. # System / # Doing tasks / # Tone / # Tool use / # Executing actions
+ *   4. # Environment            — cwd / platform / git / model / today
+ *   5. # Project memory         — concatenated AGENTS.md
+ *   6. Appendix layers          — host appendix, deferred-tool listing,
+ *                                 skills listing, output-style preset
  *
- * Kept separate from the base prompt sections (in `prompt.ts`) so the static
- * identity / behavior copy doesn't drown in dynamic-context concerns.
+ * `assembleSystemPrompt` returns a single flattened string for callers
+ * that just want the whole prompt. `buildCacheableSystemBlocks` returns
+ * the same content split at the four cache breakpoints used by the
+ * Anthropic prompt cache.
  */
 
-import type { MemoryEntry } from '../memory.js'
 import type { EnvironmentInfo } from '../env.js'
-import { buildSystemPrompt } from '../prompt.js'
+import { formatProjectMemory, type MemoryEntry } from '../memory.js'
+import {
+  ACTIONS_SECTION,
+  AGENT_IDENTITY,
+  buildEnvBlock,
+  DOING_TASKS_SECTION,
+  EMBEDDED_AGENT_IDENTITY,
+  INTRO_BLOCK,
+  SYSTEM_SECTION,
+  TONE_SECTION,
+  TOOL_USE_POLICY,
+} from '../prompt.js'
 import {
   formatOutputStyleSection,
   getOutputStyle,
@@ -24,32 +40,85 @@ import type { DeferredToolRegistry } from '../tools/index.js'
 
 export interface AssembleSystemPromptInput {
   env: EnvironmentInfo
-  projectMemory: MemoryEntry[]
+  projectMemory?: MemoryEntry[]
   embedded?: boolean
+  /** Replace the identity prefix entirely (advanced; sub-agents). */
+  identityOverride?: string
+  /** Free-form text appended after the core sections (host override). */
   systemPromptAppendix?: string
-  deferredRegistry: DeferredToolRegistry | null
-  skills: SkillMetadata[]
+  deferredRegistry?: DeferredToolRegistry | null
+  skills?: SkillMetadata[]
   outputStyle?: string | OutputStyle
   customOutputStyles?: Record<string, OutputStyle>
 }
 
 export function assembleSystemPrompt(input: AssembleSystemPromptInput): string {
-  const parts: string[] = []
-  if (input.systemPromptAppendix) parts.push(input.systemPromptAppendix)
-  if (input.deferredRegistry) {
-    const block = input.deferredRegistry.toSystemPromptBlock()
-    if (block) parts.push(block)
+  const sections: string[] = [
+    pickIdentity(input),
+    INTRO_BLOCK,
+    SYSTEM_SECTION,
+    DOING_TASKS_SECTION,
+    TONE_SECTION,
+    TOOL_USE_POLICY,
+    ACTIONS_SECTION,
+    buildEnvBlock(input.env),
+  ]
+  if (input.projectMemory && input.projectMemory.length > 0) {
+    sections.push(`# Project memory\n${formatProjectMemory(input.projectMemory)}`)
   }
-  if (input.skills.length > 0) parts.push(formatSkillsListing(input.skills))
-  const style = resolveOutputStyle(input.outputStyle, input.customOutputStyles)
-  if (style) parts.push(formatOutputStyleSection(style))
+  const appendix = composeAppendix(input)
+  if (appendix) sections.push(appendix)
+  return sections.join('\n\n')
+}
 
-  return buildSystemPrompt({
-    env: input.env,
-    projectMemory: input.projectMemory,
-    appendix: parts.length > 0 ? parts.join('\n\n') : undefined,
-    embedded: input.embedded,
+/**
+ * Split the system prompt into the four cache breakpoints used by Anthropic's
+ * prompt cache.
+ *
+ * The Anthropic API allows at most 4 `cache_control` entries per request, with
+ * the rule "everything before this marker is cached". We place markers at:
+ *   1. End of identity + intro (very stable; effectively static).
+ *   2. End of System / DoingTasks / Tone / ToolPolicy / Actions
+ *      (changes only on harness upgrade).
+ *   3. End of environment block + project memory + appendix (per-cwd; stable
+ *      for the duration of a session).
+ *   4. End of last user-message group — placed by the cache middleware, not
+ *      here — the previous turn's conversation tail can still hit cache when
+ *      the new turn arrives.
+ *
+ * The first three blocks are returned here; the fourth is a runtime concern.
+ */
+export function buildCacheableSystemBlocks(
+  input: AssembleSystemPromptInput,
+): { text: string; cacheable: boolean }[] {
+  const identity = pickIdentity(input)
+  const blocks: { text: string; cacheable: boolean }[] = []
+
+  // Block 1: identity + intro. Static across all sessions for a given binary.
+  blocks.push({ text: `${identity}\n\n${INTRO_BLOCK}`, cacheable: true })
+
+  // Block 2: behavior policy. Stable across upgrades.
+  blocks.push({
+    text: [
+      SYSTEM_SECTION,
+      DOING_TASKS_SECTION,
+      TONE_SECTION,
+      TOOL_USE_POLICY,
+      ACTIONS_SECTION,
+    ].join('\n\n'),
+    cacheable: true,
   })
+
+  // Block 3: env + project memory + appendix. Stable per session.
+  const tailParts: string[] = [buildEnvBlock(input.env)]
+  if (input.projectMemory && input.projectMemory.length > 0) {
+    tailParts.push(`# Project memory\n${formatProjectMemory(input.projectMemory)}`)
+  }
+  const appendix = composeAppendix(input)
+  if (appendix) tailParts.push(appendix)
+  blocks.push({ text: tailParts.join('\n\n'), cacheable: true })
+
+  return blocks
 }
 
 export function resolveOutputStyle(
@@ -68,4 +137,24 @@ export function formatSkillsListing(skills: SkillMetadata[]): string {
 The following agent skills are installed. Each is a self-contained instruction module the user has chosen to make available. Call DiscoverSkills to filter, or Skill { name } to load one's full body.
 
 ${lines.join('\n')}`
+}
+
+function pickIdentity(input: AssembleSystemPromptInput): string {
+  if (input.identityOverride) return input.identityOverride
+  return input.embedded ? EMBEDDED_AGENT_IDENTITY : AGENT_IDENTITY
+}
+
+function composeAppendix(input: AssembleSystemPromptInput): string | null {
+  const parts: string[] = []
+  if (input.systemPromptAppendix) parts.push(input.systemPromptAppendix)
+  if (input.deferredRegistry) {
+    const block = input.deferredRegistry.toSystemPromptBlock()
+    if (block) parts.push(block)
+  }
+  if (input.skills && input.skills.length > 0) {
+    parts.push(formatSkillsListing(input.skills))
+  }
+  const style = resolveOutputStyle(input.outputStyle, input.customOutputStyles)
+  if (style) parts.push(formatOutputStyleSection(style))
+  return parts.length > 0 ? parts.join('\n\n') : null
 }

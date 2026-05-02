@@ -1,9 +1,8 @@
 /**
- * Write tool — . Atomic real-disk writes with the read-before-write
- * guard so we never silently clobber a file the model hasn't seen.
+ * Write tool — atomic real-disk writes with the read-before-write guard so
+ * we never silently clobber a file the model hasn't seen.
  */
 
-import fs from 'node:fs'
 import { tool } from 'langchain'
 import { z } from 'zod'
 import { TOOL_DESCRIPTIONS, TOOL_NAMES } from './toolNames.js'
@@ -11,10 +10,9 @@ import {
   enforceBoundary,
   ensureAbsolute,
   resolveRoots,
-  statMtime,
   writeTextFile,
-  type FileStateCache,
 } from './fsUtils.js'
+import { liveMtime, type FileStateGuard } from './fileStateGuard.js'
 
 const schema = z.object({
   file_path: z.string().describe('Absolute path to write.'),
@@ -22,7 +20,7 @@ const schema = z.object({
 })
 
 export interface WriteToolOptions {
-  fileStateCache: FileStateCache
+  fileStateGuard: FileStateGuard
   cwd?: string
   additionalDirectories?: readonly string[]
 }
@@ -32,28 +30,15 @@ export function createWriteTool(options: WriteToolOptions) {
     options.cwd ?? process.cwd(),
     options.additionalDirectories ?? [],
   )
+  const { fileStateGuard: guard } = options
   return tool(
     (input: z.infer<typeof schema>) => {
       const abs = ensureAbsolute(input.file_path, 'file_path')
       enforceBoundary(abs, roots)
-      const existing = statMtime(abs)
-      if (existing !== undefined) {
-        const known = options.fileStateCache.get(abs)
-        if (known === undefined) {
-          throw new Error(
-            `${abs} exists. Use the Read tool to read it first, then call Write.`,
-          )
-        }
-        if (Math.abs(known - existing) > 1) {
-          throw new Error(
-            `${abs} changed on disk since the last Read. Re-read it before writing.`,
-          )
-        }
-      }
+      const { existed } = guard.checkWrite(abs)
       writeTextFile(abs, input.content)
-      const newMtime = fs.statSync(abs).mtimeMs
-      options.fileStateCache.set(abs, newMtime)
-      const action = existing === undefined ? 'created' : 'overwrote'
+      guard.record(abs, liveMtime(abs))
+      const action = existed ? 'overwrote' : 'created'
       return `${action} ${abs} (${input.content.length} bytes)`
     },
     {

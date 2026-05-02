@@ -1,14 +1,8 @@
 /**
- * Permission-mode middleware — gate tool calls by mode + fine-grained rules.
- *
- * Two layers, evaluated in order:
- *   1. Per-tool/per-arg rules (from settings.permissions). First match wins.
- *      An "allow" rule short-circuits the mode gate; a "deny" rule rejects.
- *   2. Mode classifier (read vs write vs unknown). plan mode blocks writes.
- *
- * we evaluate rules first because that's the strongest user signal:
- * a user-defined deny on `Bash command="rm -rf*"` should fire even in
- * `bypassPermissions` mode.
+ * Permission middleware — defers every "may this tool run?" question to
+ * the unified PermissionGate. This file is a thin adapter that pulls the
+ * mode out of state, hands the decision off, and translates the result
+ * into a `ToolMessage` rejection when needed.
  */
 
 import {
@@ -18,14 +12,11 @@ import {
 } from 'langchain'
 import { z } from 'zod'
 import {
-  decide,
+  evaluatePermission,
   PERMISSION_MODES,
   type PermissionMode,
-} from '../permissionMode.js'
-import {
-  evaluateRules,
   type PermissionRule,
-} from '../permissionRules.js'
+} from '../permission.js'
 
 export interface PermissionModeMiddlewareOptions {
   initialMode?: PermissionMode
@@ -45,7 +36,7 @@ const stateSchema = z.object({
 export function createPermissionModeMiddleware(
   options: PermissionModeMiddlewareOptions = {},
 ): AgentMiddleware {
-  const extra = new Set(options.extraReadOnly ?? [])
+  const extraReadOnly = new Set(options.extraReadOnly ?? [])
   const rules = options.rules ?? []
   const initial = options.initialMode ?? 'default'
 
@@ -57,35 +48,22 @@ export function createPermissionModeMiddleware(
       return undefined
     },
     wrapToolCall: async (request, handler) => {
-      // Layer 1: per-tool rules.
-      const rule = evaluateRules(request.toolCall.name, request.toolCall.args, rules)
-      if (rule.mode === 'deny') {
-        const reason = rule.reason ?? 'Denied by permission rule.'
-        options.onDenied?.(request.toolCall.name, reason)
-        return new ToolMessage({
-          content: reason,
-          tool_call_id: request.toolCall.id ?? '',
-          name: request.toolCall.name,
-          status: 'error',
-        })
-      }
-      if (rule.mode === 'allow') {
-        return handler(request)
-      }
-
-      // Layer 2: mode classifier.
-      const mode = request.state.permissionMode ?? initial
-      const decision = decide(mode, request.toolCall.name, extra)
-      if (!decision.allowed) {
-        options.onDenied?.(request.toolCall.name, decision.reason ?? 'denied')
-        return new ToolMessage({
-          content: decision.reason ?? 'Tool denied by permission mode.',
-          tool_call_id: request.toolCall.id ?? '',
-          name: request.toolCall.name,
-          status: 'error',
-        })
-      }
-      return handler(request)
+      const decision = evaluatePermission({
+        mode: request.state.permissionMode ?? initial,
+        toolName: request.toolCall.name,
+        args: request.toolCall.args,
+        rules,
+        extraReadOnly,
+      })
+      if (decision.allowed) return handler(request)
+      const reason = decision.reason ?? 'denied'
+      options.onDenied?.(request.toolCall.name, reason)
+      return new ToolMessage({
+        content: reason,
+        tool_call_id: request.toolCall.id ?? '',
+        name: request.toolCall.name,
+        status: 'error',
+      })
     },
   })
 }

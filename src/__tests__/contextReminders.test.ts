@@ -6,12 +6,16 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import { ccReminders, type ReminderContext } from '../middleware/reminders.js'
+import {
+  ccReminders,
+  createReminderStore,
+  type ReminderContext,
+} from '../middleware/reminders.js'
 import { makeFileStateCache } from '../tools/fsUtils.js'
 
 function ctx(overrides: Partial<ReminderContext> = {}): ReminderContext {
   return {
-    state: {},
+    store: createReminderStore({}, 'test'),
     turn: 1,
     lastUserText: '',
     todos: [],
@@ -78,7 +82,7 @@ describe('ccReminders.cwdDrift', () => {
   })
 
   test('does not re-fire while cwd stays at the same drifted location', () => {
-    let live = '/repo/sub'
+    const live = '/repo/sub'
     const r = ccReminders.cwdDrift(() => live, '/repo')
     expect(r.shouldFire(ctx({ turn: 1 }))).toBeTruthy()
     expect(r.shouldFire(ctx({ turn: 2 }))).toBeFalsy()

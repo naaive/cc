@@ -19,7 +19,6 @@ export { ConfigurationError, HookFailureError } from './errors.js'
 export {
   ACTIONS_SECTION,
   buildEnvBlock,
-  buildSystemPrompt,
   EMBEDDED_AGENT_IDENTITY,
   AGENT_IDENTITY,
   DOING_TASKS_SECTION,
@@ -27,8 +26,14 @@ export {
   SYSTEM_SECTION,
   TONE_SECTION,
   TOOL_USE_POLICY,
-  type BuildSystemPromptInput,
 } from './prompt.js'
+export {
+  assembleSystemPrompt,
+  buildCacheableSystemBlocks,
+  formatSkillsListing,
+  resolveOutputStyle,
+  type AssembleSystemPromptInput,
+} from './agent/systemPromptAssembly.js'
 
 // ── Environment + memory ─────────────────────────────────────────────
 export {
@@ -55,19 +60,16 @@ export {
 } from './settings.js'
 export {
   classifyTool,
-  decide as decidePermission,
+  evaluatePermission,
   PERMISSION_MODES,
   READ_TOOL_NAMES,
   WRITE_TOOL_NAMES,
+  type EvaluatePermissionInput,
   type PermissionDecision,
   type PermissionMode,
-} from './permissionMode.js'
-export {
-  evaluateRules,
   type PermissionRule,
   type PermissionRuleMode,
-  type RuleDecision,
-} from './permissionRules.js'
+} from './permission.js'
 
 // ── Output styles ────────────────────────────────────────────────────
 export {

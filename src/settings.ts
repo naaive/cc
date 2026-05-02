@@ -14,8 +14,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { HookConfig } from './middleware/hooks.js'
-import type { PermissionMode } from './permissionMode.js'
-import type { PermissionRule } from './permissionRules.js'
+import type { PermissionMode, PermissionRule } from './permission.js'
 
 export interface Settings {
   /** Default model id. */

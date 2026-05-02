@@ -5,7 +5,9 @@
  *
  * Every turn, before the model runs, we:
  *  1. Snapshot the latest user message text.
- *  2. Ask each registered reminder whether it wants to fire.
+ *  2. Build a `ReminderContext` for each registered reminder, with a
+ *     per-reminder `store` namespaced by reminder name (so two reminders
+ *     can use the same key without colliding).
  *  3. Append the fired reminders as one `<system-reminder>...</...>` block
  *     to that user message.
  *
@@ -22,11 +24,22 @@ import {
   type BaseMessage,
 } from 'langchain'
 import { z } from 'zod'
-import { ccReminders, type Reminder, type ReminderContext } from './reminders.js'
+import {
+  ccReminders,
+  createReminderStore,
+  type Reminder,
+  type ReminderContext,
+  type ReminderStore,
+} from './reminders.js'
 import type { Todo } from '../tools/todoWrite.js'
-import type { PermissionMode } from '../permissionMode.js'
 
-export { ccReminders, type Reminder, type ReminderContext }
+export {
+  ccReminders,
+  createReminderStore,
+  type Reminder,
+  type ReminderContext,
+  type ReminderStore,
+}
 export type CCReminderFactory = typeof ccReminders
 
 const stateSchema = z.object({
@@ -53,27 +66,35 @@ export function createContextEngineeringMiddleware(
       const lastUser = findLastUser(state.messages)
       if (!lastUser) return { __turnCount: turn }
 
-      const ctx: ReminderContext = {
-        state: state.reminderState ?? {},
-        turn,
-        lastUserText: messageToString(lastUser),
-        todos: (state.todos ?? []) as Todo[],
-        permissionMode: state.permissionMode ?? 'default',
-      }
-      const fired = options.reminders
-        .map(r => ({ name: r.name, text: r.shouldFire(ctx) }))
-        .filter((r): r is { name: string; text: string } => Boolean(r.text))
+      const stateBag = state.reminderState ?? {}
+      const lastUserText = messageToString(lastUser)
+      const todos = (state.todos ?? []) as Todo[]
+      const permissionMode = state.permissionMode ?? 'default'
 
-      if (fired.length === 0) return { __turnCount: turn }
+      const fired: Array<{ name: string; text: string }> = []
+      for (const reminder of options.reminders) {
+        const text = reminder.shouldFire({
+          store: createReminderStore(stateBag, reminder.name),
+          turn,
+          lastUserText,
+          todos,
+          permissionMode,
+        })
+        if (text) fired.push({ name: reminder.name, text })
+      }
+
+      if (fired.length === 0) {
+        return { __turnCount: turn, reminderState: stateBag }
+      }
 
       const block = fired
         .map(f => `<system-reminder name="${f.name}">${f.text}</system-reminder>`)
         .join('\n')
 
-      const next = new HumanMessage(`${ctx.lastUserText}\n\n${block}`)
+      const next = new HumanMessage(`${lastUserText}\n\n${block}`)
       const messages = [...state.messages]
       messages[messages.lastIndexOf(lastUser)] = next
-      return { messages, __turnCount: turn }
+      return { messages, __turnCount: turn, reminderState: stateBag }
     },
   })
 }

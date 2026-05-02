@@ -1,37 +1,18 @@
 /**
- * System prompt assembly.
+ * Static system-prompt sections.
  *
- * Layout:
- *   1. Identity prefix      — "You are Forge, …"
- *   2. Intro paragraph      — interactive agent + cybersec posture + URL rule
- *   3. # System             — output text policy, permission mode, system-reminders
- *   4. # Doing tasks        — engineering style guidance
- *   5. # Tone and style     — concise, no emoji, file:line refs
- *   6. # Tool use policy    — parallel calls, dedicated tool preference
- *   7. # Executing actions with care — destructive-action gating
- *   8. # Environment        — cwd / platform / git / model / today
- *   9. # Project memory     — concatenated AGENTS.md
- *  10. user-supplied appendix
+ * This file is a *template library* — every export is either a string
+ * constant or a tiny pure formatter over `EnvironmentInfo`. Composition
+ * (deciding which sections to include, where the cache breakpoints land,
+ * what appendix to bolt on) lives in `agent/systemPromptAssembly.ts`.
  *
- * Each section is exposed individually so callers can swap one without
- * forking the whole prompt — useful for sub-agents that want to reuse
- * everything except the identity line.
+ * The split exists so the static copy that defines Forge's behaviour stays
+ * legible and round-trips through diffs cleanly, without getting tangled
+ * up with skill / output-style / deferred-tool wiring.
  */
 
 import type { EnvironmentInfo } from './env.js'
-import { formatProjectMemory, type MemoryEntry } from './memory.js'
 import { TOOL_NAMES } from './tools/toolNames.js'
-
-export interface BuildSystemPromptInput {
-  env: EnvironmentInfo
-  projectMemory?: MemoryEntry[]
-  /** Extra prompt text appended after the core sections (user override). */
-  appendix?: string
-  /** Replace the identity prefix entirely (advanced). */
-  identityOverride?: string
-  /** When true, swap the prefix to the embedded-agent identity (host application). */
-  embedded?: boolean
-}
 
 export const AGENT_IDENTITY = `You are Forge, an AI coding agent.`
 export const EMBEDDED_AGENT_IDENTITY = `You are Forge, an AI coding agent embedded in a host application.`
@@ -101,77 +82,4 @@ You have been invoked in the following environment:
  - OS Version: ${env.osRelease}
  - Today's date: ${env.today}
  - You are powered by the model: ${env.modelId}`
-}
-
-export function buildSystemPrompt(input: BuildSystemPromptInput): string {
-  const sections: string[] = []
-  if (input.identityOverride) {
-    sections.push(input.identityOverride)
-  } else if (input.embedded) {
-    sections.push(EMBEDDED_AGENT_IDENTITY)
-  } else {
-    sections.push(AGENT_IDENTITY)
-  }
-  sections.push(INTRO_BLOCK)
-  sections.push(SYSTEM_SECTION)
-  sections.push(DOING_TASKS_SECTION)
-  sections.push(TONE_SECTION)
-  sections.push(TOOL_USE_POLICY)
-  sections.push(ACTIONS_SECTION)
-  sections.push(buildEnvBlock(input.env))
-  if (input.projectMemory && input.projectMemory.length > 0) {
-    sections.push(`# Project memory\n${formatProjectMemory(input.projectMemory)}`)
-  }
-  if (input.appendix) sections.push(input.appendix)
-  return sections.join('\n\n')
-}
-
-/**
- * Split the system prompt into the four cache breakpoints used by Anthropic's
- * prompt cache.
- *
- * The Anthropic API allows at most 4 `cache_control` entries per request, with
- * the rule "everything before this marker is cached". We place markers at:
- *   1. End of identity + intro (very stable; effectively static).
- *   2. End of System / DoingTasks / Tone / ToolPolicy / Actions
- *      (changes only on harness upgrade).
- *   3. End of environment block + project memory (per-cwd; stable for the
- *      duration of a session).
- *   4. End of last user-message group (per-turn; the previous turn's
- *      conversation tail can still hit cache when the new turn arrives).
- *
- * The first three are exposed as "system blocks" so the cache middleware can
- * attach `cache_control` markers at the right boundaries.
- */
-export function buildCacheableSystemBlocks(
-  input: BuildSystemPromptInput,
-): { text: string; cacheable: boolean }[] {
-  const identity = input.identityOverride
-    ?? (input.embedded ? EMBEDDED_AGENT_IDENTITY : AGENT_IDENTITY)
-  const blocks: { text: string; cacheable: boolean }[] = []
-
-  // Block 1: identity + intro. Static across all sessions for a given binary.
-  blocks.push({ text: `${identity}\n\n${INTRO_BLOCK}`, cacheable: true })
-
-  // Block 2: behavior policy. Stable across upgrades.
-  blocks.push({
-    text: [
-      SYSTEM_SECTION,
-      DOING_TASKS_SECTION,
-      TONE_SECTION,
-      TOOL_USE_POLICY,
-      ACTIONS_SECTION,
-    ].join('\n\n'),
-    cacheable: true,
-  })
-
-  // Block 3: env + project memory. Stable per session, recomputed on /clear.
-  const tailParts: string[] = [buildEnvBlock(input.env)]
-  if (input.projectMemory && input.projectMemory.length > 0) {
-    tailParts.push(`# Project memory\n${formatProjectMemory(input.projectMemory)}`)
-  }
-  if (input.appendix) tailParts.push(input.appendix)
-  blocks.push({ text: tailParts.join('\n\n'), cacheable: true })
-
-  return blocks
 }

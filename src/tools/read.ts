@@ -14,6 +14,9 @@
  * text so the model can see them. Text reading stays the default.
  *
  * Plus `additionalDirectories` boundary check from settings.
+ *
+ * The cache + storage-URI policy lives in `FileStateGuard`; this tool
+ * just orchestrates the read.
  */
 
 import fs from 'node:fs'
@@ -28,11 +31,14 @@ import {
   ensureAbsolute,
   readTextFile,
   resolveRoots,
-  statMtime,
-  type FileStateCache,
 } from './fsUtils.js'
-import { parseStorageUri, type ResultStore } from './resultStore.js'
+import {
+  FILE_UNCHANGED_STUB,
+  type FileStateGuard,
+} from './fileStateGuard.js'
 import { pathRecoveryHint } from './pathRecovery.js'
+
+export { FILE_UNCHANGED_STUB }
 
 const schema = z.object({
   file_path: z
@@ -53,8 +59,7 @@ const schema = z.object({
 })
 
 export interface ReadToolOptions {
-  fileStateCache: FileStateCache
-  resultStore?: ResultStore
+  fileStateGuard: FileStateGuard
   /** Working directory (used by path recovery + boundary checks). */
   cwd?: string
   /** Extra directories the Read tool may touch beyond cwd. */
@@ -62,9 +67,6 @@ export interface ReadToolOptions {
   /** Hook invoked when a file is read — used by conditional skill activation. */
   onFileRead?: (absPath: string) => void
 }
-
-export const FILE_UNCHANGED_STUB =
-  'File unchanged since last Read. The content from the earlier Read tool_result in this conversation is still current — refer to that instead of re-reading.'
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp'])
 const PDF_EXT = '.pdf'
@@ -81,41 +83,34 @@ export function createReadTool(options: ReadToolOptions) {
   for (const ext of IMAGE_EXTS) mediaHandlers.set(ext, p => readImageContent(p, ext))
   mediaHandlers.set(PDF_EXT, readPdfContent)
   mediaHandlers.set(NOTEBOOK_EXT, readNotebookContent)
+  const { fileStateGuard: guard } = options
 
   return tool(
     (input: z.infer<typeof schema>) => {
-      const storeId = parseStorageUri(input.file_path)
-      if (storeId) {
-        if (!options.resultStore) {
-          return `(no result store configured for ${input.file_path})`
-        }
-        const entry = options.resultStore.get(storeId)
-        if (!entry) return `(unknown storage id: ${storeId})`
-        return `${entry.content}\n\n[restored from ${input.file_path} — original tool: ${entry.toolName}, ${entry.size} bytes]`
-      }
+      const stored = guard.restoreFromStore(input.file_path)
+      if (stored !== null) return stored
 
       const abs = ensureAbsolute(input.file_path, 'file_path')
       enforceBoundary(abs, roots)
 
-      const known = options.fileStateCache.get(abs)
-      const live = statMtime(abs)
-      if (live === undefined) {
-        const hint = pathRecoveryHint(abs, roots.cwd)
-        throw new Error(`file not found: ${abs}${hint ? `\n\n${hint}` : ''}`)
+      const paged = input.offset != null || input.limit != null
+      let check: { unchanged: true } | { mtime: number }
+      try {
+        check = guard.checkRead(abs, paged)
+      } catch (err) {
+        // ENOENT-style misses get a "Did you mean ...?" hint.
+        if (err instanceof Error && err.message.startsWith('file not found:')) {
+          const hint = pathRecoveryHint(abs, roots.cwd)
+          throw new Error(`${err.message}${hint ? `\n\n${hint}` : ''}`)
+        }
+        throw err
       }
-      if (
-        known !== undefined &&
-        Math.abs(known - live) < 1 &&
-        input.offset == null &&
-        input.limit == null
-      ) {
-        return FILE_UNCHANGED_STUB
-      }
+      if ('unchanged' in check) return FILE_UNCHANGED_STUB
 
       const ext = path.extname(abs).toLowerCase()
       const mediaHandler = mediaHandlers.get(ext)
       if (mediaHandler) {
-        options.fileStateCache.set(abs, live)
+        guard.record(abs, check.mtime)
         options.onFileRead?.(abs)
         return mediaHandler(abs)
       }
@@ -124,7 +119,7 @@ export function createReadTool(options: ReadToolOptions) {
         offset: input.offset,
         limit: input.limit,
       })
-      options.fileStateCache.set(abs, result.mtimeMs)
+      guard.record(abs, result.mtimeMs)
       options.onFileRead?.(abs)
       const startLine = (input.offset ?? 0) + 1
       const numbered = addLineNumbers(result.text, startLine)

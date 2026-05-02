@@ -29,24 +29,35 @@ bun run test:all       # typecheck + test
 
 ## Architecture map
 
-| Concern                     | Where it lives                                      |
-| --------------------------- | --------------------------------------------------- |
-| Public entrypoint           | `src/agent.ts` (`createForgeAgent`)                 |
-| Tool list assembly          | `src/agent/buildTools.ts`                           |
-| Middleware chain assembly   | `src/agent/buildMiddleware.ts`                      |
-| System prompt               | `src/prompt.ts` + `src/agent/systemPromptAssembly.ts` |
-| AGENTS.md loader            | `src/memory.ts`                                     |
-| Settings merge              | `src/settings.ts`                                   |
-| Permission classifier       | `src/permissionMode.ts`, `src/permissionRules.ts`   |
-| Tool registry / names       | `src/tools/toolNames.ts`                            |
-| Built-in tools              | `src/tools/*.ts`                                    |
-| Middleware                  | `src/middleware/*.ts`                               |
-| Skills (Agent Skills spec)  | `src/skills/*.ts`                                   |
-| Slash commands              | `src/commands/*.ts`                                 |
-| MCP adapter                 | `src/mcp/index.ts`                                  |
-| Pure helpers                | `src/lib/*.ts`                                      |
+| Concern                     | Where it lives                                          |
+| --------------------------- | ------------------------------------------------------- |
+| Public entrypoint           | `src/agent.ts` (`createForgeAgent`)                     |
+| Tool list assembly          | `src/agent/buildTools.ts`                               |
+| Middleware chain assembly   | `src/agent/buildMiddleware.ts`                          |
+| System prompt — templates   | `src/prompt.ts` (static sections, env builder)          |
+| System prompt — composition | `src/agent/systemPromptAssembly.ts` (single entry point) |
+| AGENTS.md loader            | `src/memory.ts`                                         |
+| Settings merge              | `src/settings.ts`                                       |
+| Permission gate             | `src/permission.ts` (one decision layer, mode + rules)  |
+| Tool registry / names       | `src/tools/toolNames.ts`                                |
+| Built-in tools              | `src/tools/*.ts`                                        |
+| Read/Edit/Write seam        | `src/tools/fileStateGuard.ts`                           |
+| Middleware                  | `src/middleware/*.ts`                                   |
+| Skills (Agent Skills spec)  | `src/skills/*.ts`                                       |
+| Slash commands              | `src/commands/*.ts`                                     |
+| MCP adapter                 | `src/mcp/index.ts`                                      |
+| Pure helpers                | `src/lib/*.ts`                                          |
 
 The middleware chain runs in the order documented in `agent/buildMiddleware.ts` — that order is load-bearing, don't reshuffle without understanding the data flow.
+
+## Core concepts
+
+A few load-bearing names. Use them consistently when adding code.
+
+- **PermissionGate** (`src/permission.ts`) — single decision function `evaluatePermission({ mode, toolName, args, rules, extraReadOnly })` returning a `PermissionDecision`. Coarse mode (`plan`/`bypassPermissions`/…) and per-tool/per-arg rules are evaluated together; rules win first so `deny Bash command="rm -rf*"` fires even under `bypassPermissions`. Don't reach into the underlying classifier or rule matcher from outside this file.
+- **FileStateGuard** (`src/tools/fileStateGuard.ts`) — single seam Read/Edit/Write call into for "may the model touch this file?". Owns the read-before-edit invariant, the mtime-fresh check, the `forge-store://` storage-URI restoration, and the `FILE_UNCHANGED_STUB` short-circuit. New fs-aware tools should depend on the guard, never on `FileStateCache` or `ResultStore` directly.
+- **ReminderStore** (`src/middleware/reminders.ts`) — per-reminder state pocket handed to each `Reminder.shouldFire(ctx)`. Two reminders can use the same key (`lastTurn`) with no risk of collision; `createReminderStore(state, name)` does the namespacing.
+- **assembleSystemPrompt** (`src/agent/systemPromptAssembly.ts`) — the only function that decides what the model sees. `prompt.ts` is a template library; never compose a prompt by hand-concatenating its sections.
 
 ## Testing rules
 

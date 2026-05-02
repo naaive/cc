@@ -1,6 +1,6 @@
 /**
- * Edit tool — . Deterministic single-occurrence string replacement
- * with the read-before-edit guard, plus optional `replace_all` for renames.
+ * Edit tool — deterministic single-occurrence string replacement with the
+ * read-before-edit guard, plus optional `replace_all` for renames.
  */
 
 import fs from 'node:fs'
@@ -13,10 +13,9 @@ import {
   ensureAbsolute,
   isBinaryFile,
   resolveRoots,
-  statMtime,
   writeTextFile,
-  type FileStateCache,
 } from './fsUtils.js'
+import { liveMtime, type FileStateGuard } from './fileStateGuard.js'
 
 const schema = z.object({
   file_path: z.string().describe('Absolute path of the file to edit.'),
@@ -32,7 +31,7 @@ const schema = z.object({
 })
 
 export interface EditToolOptions {
-  fileStateCache: FileStateCache
+  fileStateGuard: FileStateGuard
   cwd?: string
   additionalDirectories?: readonly string[]
 }
@@ -42,21 +41,12 @@ export function createEditTool(options: EditToolOptions) {
     options.cwd ?? process.cwd(),
     options.additionalDirectories ?? [],
   )
+  const { fileStateGuard: guard } = options
   return tool(
     (input: z.infer<typeof schema>) => {
       const abs = ensureAbsolute(input.file_path, 'file_path')
       enforceBoundary(abs, roots)
-      const known = options.fileStateCache.get(abs)
-      if (known === undefined) {
-        throw new Error(`Read ${abs} before editing it.`)
-      }
-      const live = statMtime(abs)
-      if (live === undefined) throw new Error(`${abs} no longer exists`)
-      if (Math.abs(known - live) > 1) {
-        throw new Error(
-          `${abs} changed on disk since the last read. Re-read it before editing.`,
-        )
-      }
+      guard.checkEdit(abs)
       if (isBinaryFile(abs)) {
         throw new Error(`refusing to edit binary file: ${abs}`)
       }
@@ -68,8 +58,7 @@ export function createEditTool(options: EditToolOptions) {
         input.replace_all ?? false,
       )
       writeTextFile(abs, next)
-      const newMtime = fs.statSync(abs).mtimeMs
-      options.fileStateCache.set(abs, newMtime)
+      guard.record(abs, liveMtime(abs))
       const occurrences =
         input.replace_all
           ? source.split(input.old_string).length - 1

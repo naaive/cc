@@ -5,12 +5,13 @@
  *
  * Each factory returns a `Reminder` whose `shouldFire(ctx)` decides on each
  * turn whether to inject a `<system-reminder>` block. Stateful reminders
- * (like the todo-stale nudge) read/write `ctx.state` so throttle windows
- * survive across turns.
+ * (like the todo-stale nudge) use `ctx.store` — a `ReminderStore` scoped to
+ * the reminder's name — so throttle windows survive across turns without
+ * key-collision risk between reminders.
  */
 
 import type { Todo } from '../tools/todoWrite.js'
-import type { PermissionMode } from '../permissionMode.js'
+import type { PermissionMode } from '../permission.js'
 import type { SkillActivator } from '../skills/activation.js'
 import { readSkillBody, type SkillMetadata } from '../skills/loader.js'
 import type { FileStateCache } from '../tools/fsUtils.js'
@@ -21,8 +22,19 @@ import {
   type BloatMessage,
 } from '../lib/contextBloat.js'
 
+/**
+ * Per-reminder state pocket. Each reminder gets its own store backed by a
+ * namespace in the middleware's state map; keys can never collide across
+ * reminders because they're never seen by other factories.
+ */
+export interface ReminderStore {
+  get<T = unknown>(key: string): T | undefined
+  set(key: string, value: unknown): void
+}
+
 export interface ReminderContext {
-  state: Record<string, unknown>
+  /** Per-reminder isolated state. Survives across turns. */
+  store: ReminderStore
   turn: number
   lastUserText: string
   todos: Todo[]
@@ -32,6 +44,31 @@ export interface ReminderContext {
 export interface Reminder {
   name: string
   shouldFire(ctx: ReminderContext): string | null | undefined
+}
+
+/**
+ * Build a `ReminderStore` backed by a slot in a shared state map. Two
+ * reminders with the same name see the same store; different names are
+ * isolated.
+ */
+export function createReminderStore(
+  state: Record<string, unknown>,
+  name: string,
+): ReminderStore {
+  let bag = state[name] as Record<string, unknown> | undefined
+  if (bag === undefined || bag === null || typeof bag !== 'object') {
+    bag = {}
+    state[name] = bag
+  }
+  const store = bag as Record<string, unknown>
+  return {
+    get<T = unknown>(key: string): T | undefined {
+      return store[key] as T | undefined
+    },
+    set(key, value) {
+      store[key] = value
+    },
+  }
 }
 
 /**
@@ -73,10 +110,9 @@ export const ccReminders = {
       name: 'todo-stale-nudge',
       shouldFire(ctx) {
         if (ctx.todos.length > 0) return null
-        const last =
-          (ctx.state['todo-nudge.lastTurn'] as number | undefined) ?? -Infinity
+        const last = ctx.store.get<number>('lastTurn') ?? -Infinity
         if (ctx.turn - last < everyNTurns) return null
-        ctx.state['todo-nudge.lastTurn'] = ctx.turn
+        ctx.store.set('lastTurn', ctx.turn)
         return "The TodoWrite tool hasn't been used recently. If you're working on tasks that would benefit from tracking progress, consider using TodoWrite. Only use it if it's relevant — ignore otherwise. NEVER mention this reminder to the user."
       },
     }
@@ -106,10 +142,9 @@ export const ccReminders = {
     return {
       name,
       shouldFire(ctx) {
-        const key = `custom.${name}.lastTurn`
-        const last = (ctx.state[key] as number | undefined) ?? -Infinity
+        const last = ctx.store.get<number>('lastTurn') ?? -Infinity
         if (ctx.turn - last < everyNTurns) return null
-        ctx.state[key] = ctx.turn
+        ctx.store.set('lastTurn', ctx.turn)
         return text
       },
     }
@@ -160,15 +195,12 @@ export const ccReminders = {
    * The listing intentionally includes mtimes so the model can correlate
    * a "did this file change?" question against its prior read snapshot.
    */
-  fileStateContext(
-    fileStateCache: FileStateCache & { entries?: () => Iterable<[string, number]> },
-    cap = 30,
-  ): Reminder {
+  fileStateContext(fileStateCache: FileStateCache, cap = 30): Reminder {
     let lastFingerprint = ''
     return {
       name: 'file-state',
-      shouldFire(ctx) {
-        const entries = collectCacheEntries(fileStateCache)
+      shouldFire() {
+        const entries = [...fileStateCache.entries()]
         if (entries.length === 0) return null
         // Hash the (path, mtime) pairs so we re-emit only when something
         // changed (new read, mtime advanced, etc.).
@@ -184,7 +216,6 @@ export const ccReminders = {
           entries.length > cap
             ? `\n  ... ${entries.length - cap} more`
             : ''
-        void ctx.turn // silence unused warning
         return `Files already Read this session (no need to re-Read unless mtime changed):\n${lines.join('\n')}${tail}`
       },
     }
@@ -296,13 +327,6 @@ export const ccReminders = {
 }
 
 export type CCReminderFactory = typeof ccReminders
-
-function collectCacheEntries(
-  cache: FileStateCache & { entries?: () => Iterable<[string, number]> },
-): Array<[string, number]> {
-  if (typeof cache.entries === 'function') return [...cache.entries()]
-  return []
-}
 
 function formatMtime(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return 'unknown'

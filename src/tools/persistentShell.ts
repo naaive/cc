@@ -1,20 +1,18 @@
 /**
- * Persistent shell — keeps `cwd`, env, and shell variables alive across
- * Bash tool calls. Plus a registry that backs the BashOutput /
- * KillShell tools by tracking detached background jobs spawned with
- * `run_in_background`.
+ * Persistent shells — keep `cwd`, env, and shell variables alive across
+ * tool calls by streaming commands through a long-lived child process and
+ * framing each command's end with a sentinel line.
  *
- * The Bash tool runs against a long-lived shell so `cd foo && pwd` and a
- * later `pwd` agree. The naive "spawn /bin/sh -c <cmd>" approach loses
- * that state. We keep a child shell open and stream commands through its
- * stdin, terminated by a sentinel, then read stdout/stderr until the
- * sentinel fires.
+ * Two concrete shells share the lifecycle, busy-flag, sentinel run loop,
+ * cwd tracking, and output capping via `BasePersistentShell`. Each one
+ * supplies its own `ShellSpec` (binary, spawn args, env extras, the
+ * sentinel-emitting command wrapper):
  *
- * Background jobs are kept in a separate map: each one is a fresh
- * non-persistent child whose stdout/stderr we accumulate. BashOutput
- * returns *new* output since the last poll; KillShell SIGTERMs the
- * process. This is the contract the model relies on so it can fire-
- * and-poll long-running commands.
+ *   - `PersistentShell` — `/bin/bash`. Default for unix hosts.
+ *   - `PersistentPowerShell` — `pwsh`. For Windows hosts.
+ *
+ * Plus a registry that backs the BashOutput / KillShell tools by tracking
+ * detached background jobs spawned with `run_in_background`.
  */
 
 import {
@@ -39,18 +37,43 @@ export interface ShellResult {
   durationMs: number
 }
 
+/** Minimum surface the cwd-drift reminder consumes. */
+export interface HasLastCwd {
+  /** Current cwd, as last reported by the shell. Updates after every run(). */
+  readonly lastCwd: string
+}
+
 export interface PersistentShellOptions {
   cwd?: string
   env?: NodeJS.ProcessEnv
-  /** Path to the shell binary. Defaults to /bin/bash on unix. */
+  /** Path to the shell binary. Defaults to the subclass's binary. */
   shell?: string
 }
 
-export class PersistentShell extends EventEmitter {
+/**
+ * Per-shell-flavour configuration. Subclasses provide one of these in
+ * their `spec()` method; everything else lives in the base.
+ */
+export interface ShellSpec {
+  /** Default binary when the host doesn't pass one. */
+  defaultBinary: string
+  /** Arguments to spawn the binary with (kept stable across runs). */
+  spawnArgs: readonly string[]
+  /** Extra env vars layered after `process.env` and the host's `env` opt. */
+  envExtras: NodeJS.ProcessEnv
+  /**
+   * Wrap the user-supplied command so that stdout ends with one
+   * `<sentinel>:<exitCode>:<cwd>\n` line and nothing else after it.
+   */
+  wrapCommand(command: string, sentinel: string): string
+  /** Sentinel prefix (purely cosmetic; helps debugging). */
+  sentinelPrefix: string
+}
+
+abstract class BasePersistentShell extends EventEmitter implements HasLastCwd {
   private child: ChildProcessWithoutNullStreams | null = null
-  private readonly opts: PersistentShellOptions
+  protected readonly opts: PersistentShellOptions
   private busy = false
-  /** Last cwd reported by a successful `run()` — used by the cwd-drift reminder. */
   private _lastCwd: string
 
   constructor(opts: PersistentShellOptions = {}) {
@@ -59,21 +82,20 @@ export class PersistentShell extends EventEmitter {
     this._lastCwd = opts.cwd ?? process.cwd()
   }
 
-  /** Current cwd, as last reported by the shell. Updates after every run(). */
+  /** Per-shell-flavour configuration. */
+  protected abstract spec(): ShellSpec
+
   get lastCwd(): string {
     return this._lastCwd
   }
 
   start(): void {
     if (this.child) return
-    const shellPath = this.opts.shell ?? '/bin/bash'
-    // No `-i`: interactive bash plays funny games with signals on a piped
-    // stdin and corrupts our sentinel framing. We want a plain non-interactive
-    // shell that nonetheless keeps state across stdin lines, which is the
-    // default behaviour when stdin stays open.
-    this.child = spawn(shellPath, ['--noprofile', '--norc'], {
+    const spec = this.spec()
+    const shellPath = this.opts.shell ?? spec.defaultBinary
+    this.child = spawn(shellPath, [...spec.spawnArgs], {
       cwd: this.opts.cwd ?? process.cwd(),
-      env: { ...process.env, ...(this.opts.env ?? {}), PS1: '' },
+      env: { ...process.env, ...(this.opts.env ?? {}), ...spec.envExtras },
       stdio: ['pipe', 'pipe', 'pipe'],
       // detached so we own a process group; lets us SIGINT children
       // (e.g. a stuck `sleep`) without killing the shell itself.
@@ -93,7 +115,7 @@ export class PersistentShell extends EventEmitter {
   async run(command: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<ShellResult> {
     if (this.busy) {
       throw new Error(
-        'persistent shell is busy — bash tool calls must be serialized in this session',
+        'persistent shell is busy — calls must be serialized in this session',
       )
     }
     this.busy = true
@@ -101,7 +123,8 @@ export class PersistentShell extends EventEmitter {
     const child = this.child
     if (!child) throw new Error('failed to start persistent shell')
 
-    const sentinel = `__CCX_END_${randomUUID().replace(/-/g, '')}__`
+    const spec = this.spec()
+    const sentinel = `${spec.sentinelPrefix}${randomUUID().replace(/-/g, '')}__`
     const startedAt = Date.now()
 
     return await new Promise<ShellResult>(resolve => {
@@ -118,7 +141,7 @@ export class PersistentShell extends EventEmitter {
           stdout = appendCapped(stdout, text, () => (truncated = true))
           return
         }
-        // Sentinel format: __CCX_END_<id>__:<exitCode>:<cwd>\n
+        // Sentinel format: <sentinel>:<exitCode>:<cwd>\n
         stdout = appendCapped(stdout, text.slice(0, sentinelIdx), () => (truncated = true))
         const after = text.slice(sentinelIdx + sentinel.length + 1)
         const colonExit = after.indexOf(':')
@@ -160,11 +183,7 @@ export class PersistentShell extends EventEmitter {
       child.stdout.on('data', onStdout)
       child.stderr.on('data', onStderr)
 
-      // Wrap the command so we capture exit code + cwd in one atomic line
-      // emitted on stdout. `printf` (not echo) avoids trailing newlines
-      // from interactive shells.
-      const wrapped = `${command}\n__rc=$?; printf '\\n%s:%d:%s\\n' "${sentinel}" "$__rc" "$(pwd)"\n`
-      child.stdin.write(wrapped)
+      child.stdin.write(spec.wrapCommand(command, sentinel))
     })
   }
 
@@ -178,6 +197,47 @@ export class PersistentShell extends EventEmitter {
     this.child = null
   }
 }
+
+const BASH_SPEC: ShellSpec = {
+  defaultBinary: '/bin/bash',
+  // No `-i`: interactive bash plays funny games with signals on a piped
+  // stdin and corrupts our sentinel framing. We want a plain non-interactive
+  // shell that nonetheless keeps state across stdin lines, which is the
+  // default behaviour when stdin stays open.
+  spawnArgs: ['--noprofile', '--norc'],
+  envExtras: { PS1: '' },
+  // `printf` (not echo) avoids trailing newlines from interactive shells.
+  wrapCommand: (command, sentinel) =>
+    `${command}\n__rc=$?; printf '\\n%s:%d:%s\\n' "${sentinel}" "$__rc" "$(pwd)"\n`,
+  sentinelPrefix: '__CCX_END_',
+}
+
+const POWERSHELL_SPEC: ShellSpec = {
+  defaultBinary: 'pwsh',
+  spawnArgs: ['-NoProfile', '-NonInteractive', '-NoLogo', '-Command', '-'],
+  envExtras: {},
+  // PowerShell sentinel block: capture LASTEXITCODE + cwd in one Write-Host.
+  // Single-line so the parser doesn't fight CRLF normalisation.
+  wrapCommand: (command, sentinel) =>
+    `${command}\n$__rc=$LASTEXITCODE; if ($null -eq $__rc) { $__rc = 0 } ; Write-Host ("\`n${sentinel}:" + $__rc + ":" + (Get-Location).Path)\n`,
+  sentinelPrefix: '__CCX_PSH_END_',
+}
+
+export class PersistentShell extends BasePersistentShell {
+  protected spec(): ShellSpec {
+    return BASH_SPEC
+  }
+}
+
+export class PersistentPowerShell extends BasePersistentShell {
+  protected spec(): ShellSpec {
+    return POWERSHELL_SPEC
+  }
+}
+
+/** Back-compat alias: the powershell tool used to declare its own result type. */
+export type PowerShellResult = ShellResult
+export type PersistentPowerShellOptions = PersistentShellOptions
 
 function appendCapped(current: string, chunk: string, onTruncate: () => void): string {
   if (current.length >= MAX_OUTPUT_BYTES) {

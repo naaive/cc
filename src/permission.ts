@@ -105,6 +105,54 @@ export function evaluatePermission(
   return { allowed: true }
 }
 
+/**
+ * Read-side companion to `evaluatePermission` — a stable interface tools
+ * and reminders can consume to ask "what would the gate say?" without
+ * importing the middleware or threading every input through.
+ *
+ * The middleware owns mode mutation (write side). This context owns
+ * mode reads, evaluator dispatch, and rule snapshot. A future
+ * "warn-before-write" reminder, or a tool that wants to fail-fast before
+ * running an expensive operation, depends on this seam — not on
+ * `evaluatePermission` directly.
+ */
+export interface PermissionContext {
+  /** Current mode at the time of the call. */
+  currentMode(): PermissionMode
+  /** Snapshot of effective rules (settings + caller-supplied). */
+  rules(): readonly PermissionRule[]
+  /** Same outcome the gate would return at the wrapToolCall layer. */
+  check(toolName: string, args: unknown): PermissionDecision
+}
+
+export interface CreatePermissionContextOptions {
+  /** Live mode source. Called on each `check`. */
+  getMode: () => PermissionMode
+  /** Static or live rule list. Called on each `check`. */
+  getRules?: () => readonly PermissionRule[]
+  /** Tools the host wants to mark read-only beyond the built-ins. */
+  extraReadOnly?: ReadonlySet<string>
+}
+
+export function createPermissionContext(
+  options: CreatePermissionContextOptions,
+): PermissionContext {
+  const getRules = options.getRules ?? (() => [])
+  return {
+    currentMode: options.getMode,
+    rules: getRules,
+    check(toolName, args) {
+      return evaluatePermission({
+        mode: options.getMode(),
+        toolName,
+        args,
+        rules: getRules(),
+        extraReadOnly: options.extraReadOnly,
+      })
+    },
+  }
+}
+
 export function classifyTool(name: string): 'read' | 'write' | 'unknown' {
   if (WRITE_TOOL_NAMES.has(name)) return 'write'
   if (READ_TOOL_NAMES.has(name)) return 'read'

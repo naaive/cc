@@ -29,18 +29,19 @@ export {
 } from './bash.js'
 export {
   BackgroundJobRegistry,
+  PersistentPowerShell,
   PersistentShell,
   type BackgroundJob,
+  type HasLastCwd,
+  type PersistentPowerShellOptions,
   type PersistentShellOptions,
+  type PowerShellResult,
   type ShellResult,
 } from './persistentShell.js'
 
-// PowerShell (Windows-native Bash equivalent).
+// PowerShell tool factory (the underlying class lives in persistentShell.ts).
 export {
   createPowerShellTool,
-  PersistentPowerShell,
-  type PersistentPowerShellOptions,
-  type PowerShellResult,
   type PowerShellToolOptions,
 } from './powershell.js'
 

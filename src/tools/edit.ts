@@ -1,20 +1,15 @@
 /**
- * Edit tool — deterministic single-occurrence string replacement with the
- * read-before-edit guard, plus optional `replace_all` for renames.
+ * Edit tool — deterministic single-occurrence string replacement, plus
+ * optional `replace_all` for renames. The read-before-edit invariant and
+ * boundary checks live in `FileStateGuard`; this tool just performs the
+ * mutation.
  */
 
 import fs from 'node:fs'
 import { tool } from 'langchain'
 import { z } from 'zod'
 import { TOOL_DESCRIPTIONS, TOOL_NAMES } from './toolNames.js'
-import {
-  applyDeterministicEdit,
-  enforceBoundary,
-  ensureAbsolute,
-  isBinaryFile,
-  resolveRoots,
-  writeTextFile,
-} from './fsUtils.js'
+import { applyDeterministicEdit, isBinaryFile, writeTextFile } from './fsUtils.js'
 import { liveMtime, type FileStateGuard } from './fileStateGuard.js'
 
 const schema = z.object({
@@ -32,21 +27,13 @@ const schema = z.object({
 
 export interface EditToolOptions {
   fileStateGuard: FileStateGuard
-  cwd?: string
-  additionalDirectories?: readonly string[]
 }
 
 export function createEditTool(options: EditToolOptions) {
-  const roots = resolveRoots(
-    options.cwd ?? process.cwd(),
-    options.additionalDirectories ?? [],
-  )
   const { fileStateGuard: guard } = options
   return tool(
     (input: z.infer<typeof schema>) => {
-      const abs = ensureAbsolute(input.file_path, 'file_path')
-      enforceBoundary(abs, roots)
-      guard.checkEdit(abs)
+      const { abs } = guard.prepareEdit(input.file_path)
       if (isBinaryFile(abs)) {
         throw new Error(`refusing to edit binary file: ${abs}`)
       }

@@ -52,6 +52,18 @@ export interface AssembleSystemPromptInput {
   customOutputStyles?: Record<string, OutputStyle>
 }
 
+/**
+ * One block of the system-prompt appendix. Sections render lazily so they
+ * can decide to omit themselves (e.g. an empty skills list returns null).
+ * A new appendix block — Plugins, Hints, Memos — adds a section here
+ * without touching `composeAppendix`.
+ */
+export interface PromptSection {
+  /** Stable identifier; useful in tests and tracing. */
+  readonly name: string
+  render(): string | null
+}
+
 export function assembleSystemPrompt(input: AssembleSystemPromptInput): string {
   const sections: string[] = [
     pickIdentity(input),
@@ -145,16 +157,36 @@ function pickIdentity(input: AssembleSystemPromptInput): string {
 }
 
 function composeAppendix(input: AssembleSystemPromptInput): string | null {
-  const parts: string[] = []
-  if (input.systemPromptAppendix) parts.push(input.systemPromptAppendix)
-  if (input.deferredRegistry) {
-    const block = input.deferredRegistry.toSystemPromptBlock()
-    if (block) parts.push(block)
-  }
-  if (input.skills && input.skills.length > 0) {
-    parts.push(formatSkillsListing(input.skills))
-  }
-  const style = resolveOutputStyle(input.outputStyle, input.customOutputStyles)
-  if (style) parts.push(formatOutputStyleSection(style))
+  const sections = appendixSections(input)
+  const parts = sections
+    .map(s => s.render())
+    .filter((s): s is string => s !== null && s !== '')
   return parts.length > 0 ? parts.join('\n\n') : null
+}
+
+function appendixSections(input: AssembleSystemPromptInput): PromptSection[] {
+  return [
+    {
+      name: 'host-appendix',
+      render: () => input.systemPromptAppendix ?? null,
+    },
+    {
+      name: 'deferred-tools',
+      render: () => input.deferredRegistry?.toSystemPromptBlock() ?? null,
+    },
+    {
+      name: 'skills',
+      render: () =>
+        input.skills && input.skills.length > 0
+          ? formatSkillsListing(input.skills)
+          : null,
+    },
+    {
+      name: 'output-style',
+      render: () => {
+        const style = resolveOutputStyle(input.outputStyle, input.customOutputStyles)
+        return style ? formatOutputStyleSection(style) : null
+      },
+    },
+  ]
 }

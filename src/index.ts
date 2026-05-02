@@ -60,11 +60,14 @@ export {
 } from './settings.js'
 export {
   classifyTool,
+  createPermissionContext,
   evaluatePermission,
   PERMISSION_MODES,
   READ_TOOL_NAMES,
   WRITE_TOOL_NAMES,
+  type CreatePermissionContextOptions,
   type EvaluatePermissionInput,
+  type PermissionContext,
   type PermissionDecision,
   type PermissionMode,
   type PermissionRule,

@@ -1,17 +1,12 @@
 /**
- * Write tool — atomic real-disk writes with the read-before-write guard so
- * we never silently clobber a file the model hasn't seen.
+ * Write tool — atomic real-disk write. Read-before-overwrite invariant and
+ * boundary checks live in `FileStateGuard`.
  */
 
 import { tool } from 'langchain'
 import { z } from 'zod'
 import { TOOL_DESCRIPTIONS, TOOL_NAMES } from './toolNames.js'
-import {
-  enforceBoundary,
-  ensureAbsolute,
-  resolveRoots,
-  writeTextFile,
-} from './fsUtils.js'
+import { writeTextFile } from './fsUtils.js'
 import { liveMtime, type FileStateGuard } from './fileStateGuard.js'
 
 const schema = z.object({
@@ -21,21 +16,13 @@ const schema = z.object({
 
 export interface WriteToolOptions {
   fileStateGuard: FileStateGuard
-  cwd?: string
-  additionalDirectories?: readonly string[]
 }
 
 export function createWriteTool(options: WriteToolOptions) {
-  const roots = resolveRoots(
-    options.cwd ?? process.cwd(),
-    options.additionalDirectories ?? [],
-  )
   const { fileStateGuard: guard } = options
   return tool(
     (input: z.infer<typeof schema>) => {
-      const abs = ensureAbsolute(input.file_path, 'file_path')
-      enforceBoundary(abs, roots)
-      const { existed } = guard.checkWrite(abs)
+      const { abs, existed } = guard.prepareWrite(input.file_path)
       writeTextFile(abs, input.content)
       guard.record(abs, liveMtime(abs))
       const action = existed ? 'overwrote' : 'created'

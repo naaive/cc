@@ -1,25 +1,39 @@
 /**
- * FileStateGuard — single seam for "what can the model do with this file?"
+ * FileStateGuard — the single seam every fs tool calls into.
  *
- * Reads, writes, and edits all share three preconditions that the harness
- * cares about:
+ * The guard owns the entire "may the model operate on this path, and what
+ * does it get back?" contract:
  *
- *   1. Read-before-edit: the model must have observed the current bytes
- *      before mutating them, so we never silently clobber human edits.
- *   2. Mtime-fresh: between the model's last Read and a write/edit, the
- *      file's mtime must not have moved.
- *   3. Storage-URI restoration: a `forge-store://<id>` path returned by
- *      Read isn't a real filesystem path — it points at a stashed tool
- *      result the eviction middleware tucked away.
+ *  1. Path resolution: rejects relative paths, normalises `..`/`//`.
+ *  2. Boundary enforcement: the path must sit under cwd or one of the
+ *     host-whitelisted `additionalDirectories`.
+ *  3. Read-before-edit invariant: an Edit/Write/NotebookEdit on an existing
+ *     file requires a prior Read in this session, and the file's mtime must
+ *     not have moved since.
+ *  4. File-unchanged short-circuit: a re-Read of a file with the same mtime
+ *     yields a tiny stub instead of re-shipping the bytes.
+ *  5. Storage-URI restoration: a `forge-store://<id>` path returned by
+ *     Read isn't a real filesystem path — it points at a stashed tool
+ *     result the eviction middleware tucked away.
+ *  6. Path-recovery hints: ENOENT errors carry a "Did you mean ...?"
+ *     suggestion derived from a Levenshtein walk under cwd.
  *
- * Before this guard each fs tool reimplemented these checks inline, which
- * meant changing the policy required touching three call sites and three
- * sets of error strings. The guard concentrates the policy: tools call
- * `checkRead` / `checkEdit` / `checkWrite` and forget about the cache.
+ * Before the guard, each fs tool reimplemented these checks inline — five
+ * call sites, five sets of error strings. After the guard, each tool calls
+ * one method per operation and forgets about cache/roots/store.
  */
 
 import fs from 'node:fs'
-import { statMtime, type FileStateCache } from './fsUtils.js'
+import path from 'node:path'
+import {
+  ensureAbsolute,
+  enforceBoundary,
+  resolveRoots,
+  statMtime,
+  type FileStateCache,
+  type ResolvedRoots,
+} from './fsUtils.js'
+import { pathRecoveryHint } from './pathRecovery.js'
 import { parseStorageUri, type ResultStore } from './resultStore.js'
 
 export const FILE_UNCHANGED_STUB =
@@ -28,45 +42,43 @@ export const FILE_UNCHANGED_STUB =
 /** mtime difference (in ms) tolerated when comparing cache vs. live disk. */
 const MTIME_TOLERANCE_MS = 1
 
+/** Outcome of `prepareRead` — three exhaustive shapes the caller must handle. */
+export type PreparedRead =
+  | { kind: 'stored'; content: string }
+  | { kind: 'unchanged' }
+  | { kind: 'fresh'; abs: string; mtime: number }
+
 export interface FileStateGuard {
   /**
-   * Resolve a `forge-store://<id>` virtual path to its stashed content.
-   * Returns null when `filePath` is a real filesystem path. The string
-   * may itself be an error message ("unknown storage id …") — callers
-   * forward it to the model as the tool result.
-   */
-  restoreFromStore(filePath: string): string | null
-
-  /**
-   * Decide what should happen when the model Reads `absPath`. Returns:
+   * Resolve a Read request. Three outcomes:
+   *  - `stored`: the path was a `forge-store://<id>` URI; `content` is the
+   *    payload to return verbatim.
+   *  - `unchanged`: the file is byte-identical to the cached Read; caller
+   *    should return `FILE_UNCHANGED_STUB`.
+   *  - `fresh`: the caller should perform the read, then `record(abs, mtime)`.
    *
-   *  - `{ unchanged: true }` — the file is byte-identical to the cached
-   *    Read; the caller should return `FILE_UNCHANGED_STUB` and NOT touch
-   *    the cache.
-   *  - `{ mtime }` — the caller should perform the read; the live mtime
-   *    is provided so the caller doesn't need to re-`stat`. The caller is
-   *    expected to call `record(absPath, mtime)` after a successful read.
-   *
-   * Throws when the file is missing.
+   * Throws on missing files (with a path-recovery hint), invalid paths,
+   * and out-of-bounds reads.
    *
    * `paged` should be true when the caller is requesting a non-default
-   * offset/limit slice — a paged read is never short-circuited because
+   * offset/limit slice — paged reads are never short-circuited because
    * the model is asking for a different window.
    */
-  checkRead(absPath: string, paged: boolean): { unchanged: true } | { mtime: number }
+  prepareRead(filePath: string, paged: boolean): PreparedRead
 
   /**
-   * Throws unless the model is allowed to edit `absPath` (i.e. it has been
-   * Read in this session AND the on-disk mtime hasn't moved since).
+   * Resolve an Edit request. Returns the absolute, boundary-checked path
+   * once the read-before-edit invariant has been satisfied.
+   * Throws otherwise.
    */
-  checkEdit(absPath: string): void
+  prepareEdit(filePath: string): { abs: string }
 
   /**
-   * Throws unless the model is allowed to Write to `absPath`. New files
-   * are always allowed; overwriting an existing file requires a fresh
-   * Read. Returns whether the file existed.
+   * Resolve a Write request. Returns the absolute path plus whether the
+   * file already existed. New files always pass; overwrites require a
+   * prior Read on a fresh mtime.
    */
-  checkWrite(absPath: string): { existed: boolean }
+  prepareWrite(filePath: string): { abs: string; existed: boolean }
 
   /** Record an mtime observation after a successful Read / Edit / Write. */
   record(absPath: string, mtime: number): void
@@ -75,68 +87,97 @@ export interface FileStateGuard {
 export interface FileStateGuardOptions {
   cache: FileStateCache
   resultStore?: ResultStore | null
+  /**
+   * Pre-resolved roots. Either pass `roots` directly or pass `cwd` (+
+   * optional `additionalDirectories`) and the guard will resolve them.
+   */
+  roots?: ResolvedRoots
+  cwd?: string
+  additionalDirectories?: readonly string[]
 }
 
 export function createFileStateGuard(
   options: FileStateGuardOptions,
 ): FileStateGuard {
   const { cache, resultStore } = options
+  const roots =
+    options.roots ??
+    resolveRoots(
+      options.cwd ?? process.cwd(),
+      options.additionalDirectories ?? [],
+    )
+
+  function restoreFromStore(filePath: string): string | null {
+    const id = parseStorageUri(filePath)
+    if (!id) return null
+    if (!resultStore) return `(no result store configured for ${filePath})`
+    const entry = resultStore.get(id)
+    if (!entry) return `(unknown storage id: ${id})`
+    return `${entry.content}\n\n[restored from ${filePath} — original tool: ${entry.toolName}, ${entry.size} bytes]`
+  }
+
+  function resolvePath(filePath: string, label: string): string {
+    const abs = ensureAbsolute(filePath, label)
+    enforceBoundary(abs, roots)
+    return abs
+  }
 
   return {
-    restoreFromStore(filePath) {
-      const id = parseStorageUri(filePath)
-      if (!id) return null
-      if (!resultStore) return `(no result store configured for ${filePath})`
-      const entry = resultStore.get(id)
-      if (!entry) return `(unknown storage id: ${id})`
-      return `${entry.content}\n\n[restored from ${filePath} — original tool: ${entry.toolName}, ${entry.size} bytes]`
-    },
+    prepareRead(filePath, paged) {
+      const stored = restoreFromStore(filePath)
+      if (stored !== null) return { kind: 'stored', content: stored }
 
-    checkRead(absPath, paged) {
-      const live = statMtime(absPath)
+      const abs = resolvePath(filePath, 'file_path')
+      const live = statMtime(abs)
       if (live === undefined) {
-        throw new Error(`file not found: ${absPath}`)
+        const hint = pathRecoveryHint(abs, roots.cwd)
+        throw new Error(
+          `file not found: ${abs}${hint ? `\n\n${hint}` : ''}`,
+        )
       }
-      const known = cache.get(absPath)
+      const known = cache.get(abs)
       if (
         !paged &&
         known !== undefined &&
         Math.abs(known - live) <= MTIME_TOLERANCE_MS
       ) {
-        return { unchanged: true }
+        return { kind: 'unchanged' }
       }
-      return { mtime: live }
+      return { kind: 'fresh', abs, mtime: live }
     },
 
-    checkEdit(absPath) {
-      const known = cache.get(absPath)
+    prepareEdit(filePath) {
+      const abs = resolvePath(filePath, 'file_path')
+      const known = cache.get(abs)
       if (known === undefined) {
-        throw new Error(`Read ${absPath} before editing it.`)
+        throw new Error(`Read ${abs} before editing it.`)
       }
-      const live = statMtime(absPath)
-      if (live === undefined) throw new Error(`${absPath} no longer exists`)
+      const live = statMtime(abs)
+      if (live === undefined) throw new Error(`${abs} no longer exists`)
       if (Math.abs(known - live) > MTIME_TOLERANCE_MS) {
         throw new Error(
-          `${absPath} changed on disk since the last read. Re-read it before editing.`,
+          `${abs} changed on disk since the last read. Re-read it before editing.`,
         )
       }
+      return { abs }
     },
 
-    checkWrite(absPath) {
-      const existing = statMtime(absPath)
-      if (existing === undefined) return { existed: false }
-      const known = cache.get(absPath)
+    prepareWrite(filePath) {
+      const abs = resolvePath(filePath, 'file_path')
+      const existing = statMtime(abs)
+      if (existing === undefined) return { abs, existed: false }
+      const known = cache.get(abs)
       if (known === undefined) {
         throw new Error(
-          `${absPath} exists. Use the Read tool to read it first, then call Write.`,
+          `${abs} exists. Use the Read tool to read it first, then call Write.`,
         )
       }
       if (Math.abs(known - existing) > MTIME_TOLERANCE_MS) {
         throw new Error(
-          `${absPath} changed on disk since the last Read. Re-read it before writing.`,
+          `${abs} changed on disk since the last Read. Re-read it before writing.`,
         )
       }
-      return { existed: true }
+      return { abs, existed: true }
     },
 
     record(absPath, mtime) {

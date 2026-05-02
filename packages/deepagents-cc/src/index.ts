@@ -1,0 +1,87 @@
+/**
+ * @claude-code-best/cc-on-langchain
+ *
+ * A Claude-Code-grade agent harness on top of `langchain.createAgent`.
+ *
+ * Public surface (this file). Anything not re-exported here is internal —
+ * if you need it, import from the source path explicitly.
+ */
+
+// ── Agent factory + types ────────────────────────────────────────────
+export {
+  createClaudeCodeAgent,
+  type ClaudeCodeAgentBundle,
+  type CreateClaudeCodeAgentParams,
+} from './agent.js'
+
+// ── Errors ───────────────────────────────────────────────────────────
+export { ConfigurationError, HookFailureError } from './errors.js'
+
+// ── System prompt building blocks ────────────────────────────────────
+export {
+  ACTIONS_SECTION,
+  buildEnvBlock,
+  buildSystemPrompt,
+  CLAUDE_CODE_AGENT_SDK_IDENTITY,
+  CLAUDE_CODE_IDENTITY,
+  DOING_TASKS_SECTION,
+  INTRO_BLOCK,
+  SYSTEM_SECTION,
+  TONE_SECTION,
+  TOOL_USE_POLICY,
+  type BuildSystemPromptInput,
+} from './prompt.js'
+
+// ── Environment + memory ─────────────────────────────────────────────
+export {
+  captureGitStatus,
+  collectEnvironment,
+  type CollectEnvOptions,
+  type EnvironmentInfo,
+} from './env.js'
+export {
+  formatClaudeMd,
+  loadClaudeMd,
+  memoryFreshnessNote,
+  type ClaudeMdEntry,
+  type LoadClaudeMdOptions,
+} from './claudemd.js'
+
+// ── Settings + permissions ───────────────────────────────────────────
+export {
+  loadSettings,
+  mergeSettings,
+  type LoadedSettings,
+  type LoadSettingsOptions,
+  type Settings,
+} from './settings.js'
+export {
+  classifyTool,
+  decide as decidePermission,
+  PERMISSION_MODES,
+  READ_TOOL_NAMES,
+  WRITE_TOOL_NAMES,
+  type PermissionDecision,
+  type PermissionMode,
+} from './permissionMode.js'
+export {
+  evaluateRules,
+  type PermissionRule,
+  type PermissionRuleMode,
+  type RuleDecision,
+} from './permissionRules.js'
+
+// ── Output styles ────────────────────────────────────────────────────
+export {
+  formatOutputStyleSection,
+  getOutputStyle,
+  OUTPUT_STYLES,
+  type OutputStyle,
+} from './outputStyles.js'
+
+// ── Tools, middleware, skills, MCP — explicit barrels ───────────────
+export * from './tools/index.js'
+export * from './middleware/index.js'
+export * from './skills/index.js'
+export * from './commands/index.js'
+export * from './mcp/index.js'

@@ -1,0 +1,41 @@
+{
+  "name": "@claude-code-best/cc-on-langchain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Claude Code, rebuilt directly on LangChain — real-disk filesystem tools, persistent-shell bash, ripgrep-backed grep, plan/permission modes, hooks, system reminders, settings, slash commands.",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./tools": "./src/tools/index.ts",
+    "./middleware": "./src/middleware/index.ts",
+    "./settings": "./src/settings.ts",
+    "./prompt": "./src/prompt.ts"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.81.0",
+    "@langchain/anthropic": "^0.3.0",
+    "@langchain/core": "^0.3.0",
+    "@langchain/langgraph": "^0.2.0",
+    "langchain": "^0.3.0",
+    "yaml": "^2.8.3",
+    "zod": "^3.25.0"
+  },
+  "peerDependencies": {
+    "@langchain/mcp-adapters": "^0.5.0"
+  },
+  "peerDependenciesMeta": {
+    "@langchain/mcp-adapters": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  }
+}

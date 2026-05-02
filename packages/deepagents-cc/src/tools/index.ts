@@ -35,6 +35,50 @@ export {
   type ShellResult,
 } from './persistentShell.js'
 
+// PowerShell (Windows-native Bash equivalent).
+export {
+  createPowerShellTool,
+  PersistentPowerShell,
+  type PersistentPowerShellOptions,
+  type PowerShellResult,
+  type PowerShellToolOptions,
+} from './powershell.js'
+
+// Monitor (long-running bg process with completion notification).
+export {
+  createMonitorTool,
+  MonitorRegistry,
+  type MonitoredJob,
+  type MonitorToolOptions,
+} from './monitor.js'
+
+// Cron (scheduled future invocations).
+export {
+  computeNextFire,
+  createCronTools,
+  createInMemoryCronStore,
+  CronScheduler,
+  type CronJob,
+  type CronStore,
+  type CronToolsBundle,
+  type CronToolsOptions,
+} from './cron.js'
+
+// Config (whitelisted settings.json read/write).
+export {
+  createConfigTool,
+  DEFAULT_SUPPORTED_SETTINGS,
+  type ConfigSettingSpec,
+  type ConfigToolOptions,
+} from './config.js'
+
+// SlashCommand (custom .claude/commands/ templates).
+export {
+  createDiscoverSlashCommandsTool,
+  createSlashCommandTool,
+  type SlashCommandToolOptions,
+} from './slashCommand.js'
+
 // Web.
 export { createWebFetchTool, type WebFetchOptions } from './webFetch.js'
 export {

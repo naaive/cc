@@ -14,6 +14,7 @@ import type { PermissionMode } from '../permissionMode.js'
 import type { SkillActivator } from '../skills/activation.js'
 import { readSkillBody, type SkillMetadata } from '../skills/loader.js'
 import type { FileStateCache } from '../tools/fsUtils.js'
+import type { MonitorRegistry } from '../tools/monitor.js'
 
 export interface ReminderContext {
   state: Record<string, unknown>
@@ -201,6 +202,28 @@ export const ccReminders = {
         if (live === lastFiredFor) return null
         lastFiredFor = live
         return `Working directory has drifted from ${baselineCwd} to ${live} (likely a Bash \`cd\`). The Read/Write/Edit tools still take ABSOLUTE paths — the drift only affects relative-path bash invocations. If the new cwd is incorrect, run \`cd ${baselineCwd}\` to return.`
+      },
+    }
+  },
+
+  /**
+   * Monitor exit notifier. Drains the registry's pending exits each turn
+   * and emits a one-shot reminder per exited job.
+   */
+  monitorExits(registry: MonitorRegistry): Reminder {
+    return {
+      name: 'monitor-exit',
+      shouldFire() {
+        const exited = registry.drainExits()
+        if (exited.length === 0) return null
+        return exited
+          .map(j => {
+            const dur = j.exitedAt
+              ? `${Math.round((j.exitedAt - j.startedAt) / 1000)}s`
+              : '?'
+            return `Monitor ${j.id} (${j.description}) ${j.status} after ${dur}, exit ${j.exitCode ?? 'unknown'}. Read ${j.outputPath} for output.`
+          })
+          .join('\n')
       },
     }
   },

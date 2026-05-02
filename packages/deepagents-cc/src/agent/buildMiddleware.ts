@@ -44,7 +44,12 @@ import {
 import type { PermissionMode } from '../permissionMode.js'
 import type { PermissionRule } from '../permissionRules.js'
 import type { Settings } from '../settings.js'
-import type { FileStateCache, PersistentShell, ResultStore } from '../tools/index.js'
+import type {
+  FileStateCache,
+  MonitorRegistry,
+  PersistentShell,
+  ResultStore,
+} from '../tools/index.js'
 import type { SkillActivator, SkillMetadata } from '../skills/index.js'
 
 export interface BuildMiddlewareInput {
@@ -53,6 +58,7 @@ export interface BuildMiddlewareInput {
   settings: Settings
   fileStateCache: FileStateCache
   shell: PersistentShell
+  monitorRegistry: MonitorRegistry | null
   resultStore: ResultStore | null
   skillActivator: SkillActivator | null
   skills: SkillMetadata[]
@@ -132,6 +138,9 @@ export function buildMiddleware(input: BuildMiddlewareInput): AgentMiddleware[] 
     ccReminders.fileStateContext(input.fileStateCache),
     ccReminders.cwdDrift(() => input.shell.lastCwd, input.cwd),
   ]
+  if (input.monitorRegistry) {
+    reminders.push(ccReminders.monitorExits(input.monitorRegistry))
+  }
 
   if (input.autoCompactWarning !== false) {
     const warnAt = input.autoCompactWarning?.warnAt ?? 60_000

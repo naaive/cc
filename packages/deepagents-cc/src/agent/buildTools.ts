@@ -15,23 +15,34 @@ import {
   createAgentTool,
   createAskUserQuestionTool,
   createBashTools,
+  createConfigTool,
+  createCronTools,
   createDiscoverSkillsTool,
+  createDiscoverSlashCommandsTool,
   createEditTool,
   createExitPlanModeTool,
   createGlobTool,
   createGrepTool,
+  createMonitorTool,
   createNotebookEditTool,
+  createPowerShellTool,
   createReadTool,
   createSkillTool,
+  createSlashCommandTool,
   createTodoWriteTool,
   createToolSearchTool,
   createWebFetchTool,
   createWebSearchTool,
   createWriteTool,
+  CronScheduler,
   DeferredToolRegistry,
+  MonitorRegistry,
+  PersistentPowerShell,
   PersistentShell,
   TOOL_NAMES,
   type AskUserQuestionResponder,
+  type ConfigSettingSpec,
+  type CronStore,
   type FileStateCache,
   type ResultStore,
   type SubAgent,
@@ -40,6 +51,7 @@ import {
   type WebSearchImpl,
 } from '../tools/index.js'
 import type { SkillActivator, SkillMetadata } from '../skills/index.js'
+import type { CustomCommand } from '../commands/index.js'
 import type { Settings } from '../settings.js'
 import { ConfigurationError } from '../errors.js'
 
@@ -48,11 +60,17 @@ export interface BuildToolsInput {
   settings: Settings
   fileStateCache: FileStateCache
   shell: PersistentShell
+  powershell: PersistentPowerShell | null
   jobRegistry: BackgroundJobRegistry
+  monitorRegistry: MonitorRegistry | null
   resultStore: ResultStore | null
   deferredRegistry: DeferredToolRegistry | null
   skillActivator: SkillActivator | null
   skills: SkillMetadata[]
+  commands: CustomCommand[]
+  configSettings: readonly ConfigSettingSpec[]
+  cronStore: CronStore | null
+  cronScheduler: CronScheduler | null
   subagents: SubAgent[]
   subAgentFactory: SubAgentFactory
   webSearch?: WebSearchImpl
@@ -152,6 +170,72 @@ export function buildTools(input: BuildToolsInput): BuildToolsResult {
     ccTools.push(
       createSkillTool({ getSkills: () => input.skills }) as StructuredTool,
     )
+  }
+
+  // PowerShell — opt-in (host injects a shell instance for Windows runs).
+  if (input.powershell && isEnabled(TOOL_NAMES.PowerShell)) {
+    ccTools.push(
+      createPowerShellTool({
+        cwd: input.cwd,
+        denyPatterns: input.settings.bashDeny,
+        allowPatterns: input.settings.bashAllow,
+        shellInstance: input.powershell,
+      }) as StructuredTool,
+    )
+  }
+
+  // Monitor — long-running bg jobs with completion notifications.
+  if (input.monitorRegistry && isEnabled(TOOL_NAMES.Monitor)) {
+    ccTools.push(
+      createMonitorTool({
+        registry: input.monitorRegistry,
+        cwd: input.cwd,
+      }) as StructuredTool,
+    )
+  }
+
+  // Cron — scheduled future invocations.
+  if (input.cronStore && input.cronScheduler) {
+    const cron = createCronTools({
+      store: input.cronStore,
+      scheduler: input.cronScheduler,
+    })
+    if (isEnabled(TOOL_NAMES.CronCreate)) ccTools.push(cron.cronCreate as StructuredTool)
+    if (isEnabled(TOOL_NAMES.CronList)) ccTools.push(cron.cronList as StructuredTool)
+    if (isEnabled(TOOL_NAMES.CronDelete)) ccTools.push(cron.cronDelete as StructuredTool)
+  }
+
+  // Config — whitelisted settings.json read/write.
+  if (isEnabled(TOOL_NAMES.Config)) {
+    ccTools.push(
+      createConfigTool({
+        cwd: input.cwd,
+        supportedSettings: input.configSettings,
+      }) as StructuredTool,
+    )
+  }
+
+  // SlashCommand + DiscoverSlashCommands — only when commands are loaded.
+  if (input.commands.length > 0) {
+    if (isEnabled(TOOL_NAMES.SlashCommand)) {
+      ccTools.push(
+        createSlashCommandTool({
+          cwd: input.cwd,
+          getCommands: () => input.commands,
+          runBash: async (cmd: string) => {
+            const r = await input.shell.run(cmd)
+            return r.stdout
+          },
+        }) as StructuredTool,
+      )
+    }
+    if (isEnabled(TOOL_NAMES.DiscoverSlashCommands)) {
+      ccTools.push(
+        createDiscoverSlashCommandsTool({
+          getCommands: () => input.commands,
+        }) as StructuredTool,
+      )
+    }
   }
 
   enforceNoCollisions(ccTools, input.userTools)

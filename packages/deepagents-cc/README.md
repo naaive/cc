@@ -72,7 +72,12 @@ Things we built from scratch — langchain has no equivalent and cc's contract i
 | **Grep**               | Ripgrep when available, pure-Node fallback otherwise. cc's `output_mode` enum (`content`, `files_with_matches`, `count`) and `-i`, `multiline`, `glob`, `head_limit` all supported.                              |
 | **Summarization**      | Token-budget compaction with a pluggable summarizer (offline heuristic by default).                                                                                                                              |
 | **Slash commands**     | `/clear`, `/help`, `/init`, `/compact`, `/memory`, `/mode`.                                                                                                                                                      |
-| **Hosting**            | Library only — no CLI / REPL / slash commands. Drop `createClaudeCodeAgent` into your own runtime.                                                                                                              |
+| **Hosting**            | Library only — no CLI / REPL bundled. Drop `createClaudeCodeAgent` into your own runtime.                                                                                                                       |
+| **PowerShell**         | `PersistentPowerShell` — Windows-native equivalent of Bash. Same persistent semantics (Set-Location, $env:VAR persist).                                                                                          |
+| **Monitor**            | Long-running bg process with completion notification. Output streams to a file; system-reminder fires when the process exits.                                                                                   |
+| **Cron**               | `CronCreate` / `CronList` / `CronDelete`. Supports ISO date / "in N units" / "every N units" / "@hourly" / "@daily". In-process scheduler by default; pluggable `CronStore` for durable schedulers.             |
+| **Config**             | `Config` tool reads/writes a host-supplied whitelist of settings.json keys. Writes are NOT hot-reloaded.                                                                                                          |
+| **Custom commands**    | `.claude/commands/<name>.md` (project + user). Frontmatter (description / argument-hint / allowed-tools / model). Body supports `$ARGUMENTS` / `!bash` / `@file`. Exposed via `SlashCommand` + `DiscoverSlashCommands`. |
 
 ## Quickstart
 
@@ -306,7 +311,7 @@ Boundary safety: T4 never cuts between an `AIMessage` with `tool_calls` and the 
 
 ```bash
 $ bun test
- 231 pass
+ 253 pass
  0 fail
 ```
 

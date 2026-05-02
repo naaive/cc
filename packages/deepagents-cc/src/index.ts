@@ -83,4 +83,5 @@ export {
 export * from './tools/index.js'
 export * from './middleware/index.js'
 export * from './skills/index.js'
+export * from './commands/index.js'
 export * from './mcp/index.js'

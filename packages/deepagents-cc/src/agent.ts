@@ -29,16 +29,26 @@ import { loadSettings, type Settings } from './settings.js'
 import {
   BackgroundJobRegistry,
   createInMemoryResultStore,
+  createInMemoryCronStore,
+  CronScheduler,
   DeferredToolRegistry,
+  DEFAULT_SUPPORTED_SETTINGS,
   makeFileStateCache,
+  MonitorRegistry,
+  PersistentPowerShell,
   PersistentShell,
   type AskUserQuestionResponder,
+  type ConfigSettingSpec,
+  type CronJob,
+  type CronStore,
   type FileStateCache,
   type ResultStore,
   type SubAgent,
   type ToolName,
   type WebSearchImpl,
 } from './tools/index.js'
+import type { CustomCommand } from './commands/index.js'
+import { listCommands } from './commands/index.js'
 import {
   createSkillActivator,
   listSkills,
@@ -132,6 +142,27 @@ export interface CreateClaudeCodeAgentParams {
   store?: BaseStore
   /** Extra middleware appended at the end of the chain (host passthrough). */
   extraMiddleware?: AgentMiddleware[]
+  /** Inject a shared PowerShell instance (Windows hosts). */
+  powershell?: PersistentPowerShell
+  /** Monitor registry (long-running bg jobs). Auto-created when Monitor is enabled. */
+  monitorRegistry?: MonitorRegistry
+  /**
+   * Custom commands sources. When set, the SlashCommand /
+   * DiscoverSlashCommands tools are wired automatically.
+   */
+  commands?: {
+    userCommandsDir?: string | null
+    projectCommandsDir?: string | null
+    /** Inline commands (already parsed). */
+    inline?: CustomCommand[]
+  }
+  /** Config tool whitelist. Defaults to DEFAULT_SUPPORTED_SETTINGS. */
+  configSettings?: readonly ConfigSettingSpec[]
+  /** Cron store + tools opt-in. When set, CronCreate/List/Delete are registered. */
+  cron?: {
+    store?: CronStore
+    onTrigger: (job: CronJob) => void
+  }
 }
 
 export interface ClaudeCodeAgentBundle {
@@ -153,6 +184,14 @@ export interface ClaudeCodeAgentBundle {
   deferredRegistry: DeferredToolRegistry | null
   mcpClient: MultiServerMCPClient | null
   skillActivator: SkillActivator | null
+  /** Loaded custom commands (from `.claude/commands/`). */
+  commands: CustomCommand[]
+  /** Monitor registry — owner must call `.stopAll()` on shutdown. */
+  monitorRegistry: MonitorRegistry | null
+  /** PowerShell shell instance (when configured). */
+  powershell: PersistentPowerShell | null
+  /** Cron scheduler (when configured). */
+  cronScheduler: CronScheduler | null
 }
 
 export function createClaudeCodeAgent(
@@ -176,6 +215,33 @@ export function createClaudeCodeAgent(
     params.resultStore === false
       ? null
       : params.resultStore ?? createInMemoryResultStore()
+
+  // Custom commands.
+  const commands: CustomCommand[] = params.commands
+    ? [
+        ...(params.commands.inline ?? []),
+        ...listCommands({
+          userCommandsDir: params.commands.userCommandsDir,
+          projectCommandsDir: params.commands.projectCommandsDir,
+        }),
+      ]
+    : []
+
+  // Monitor registry — created on demand.
+  const monitorRegistry =
+    params.monitorRegistry ??
+    (params.disable?.includes('Monitor') ? null : new MonitorRegistry())
+
+  // PowerShell shell — host-injected; if absent we still construct lazily so
+  // the tool can spawn `pwsh` when the model asks. On non-Windows hosts the
+  // tool will gracefully error on the first call.
+  const powershell = params.powershell ?? null
+
+  // Cron scheduler — opt-in (requires onTrigger callback).
+  const cronStore = params.cron?.store ?? createInMemoryCronStore()
+  const cronScheduler = params.cron
+    ? new CronScheduler(cronStore, params.cron.onTrigger)
+    : null
 
   // Skills.
   const skills = params.skills
@@ -226,11 +292,17 @@ export function createClaudeCodeAgent(
     settings,
     fileStateCache,
     shell,
+    powershell,
     jobRegistry,
+    monitorRegistry,
     resultStore,
     deferredRegistry,
     skillActivator,
     skills,
+    commands,
+    configSettings: params.configSettings ?? DEFAULT_SUPPORTED_SETTINGS,
+    cronStore: params.cron ? cronStore : null,
+    cronScheduler,
     subagents: params.subagents ?? [],
     subAgentFactory: sub => {
       // Sub-agent: share fileStateCache + shell + jobRegistry so disk state
@@ -270,6 +342,7 @@ export function createClaudeCodeAgent(
     settings,
     fileStateCache,
     shell,
+    monitorRegistry,
     resultStore,
     skillActivator,
     skills,
@@ -311,5 +384,9 @@ export function createClaudeCodeAgent(
     deferredRegistry,
     mcpClient: params.mcpClient ?? null,
     skillActivator,
+    commands,
+    monitorRegistry,
+    powershell,
+    cronScheduler,
   }
 }

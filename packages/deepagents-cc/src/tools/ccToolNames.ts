@@ -29,6 +29,14 @@ export const TOOL_NAMES = {
   AskUserQuestion: 'AskUserQuestion',
   ExitPlanMode: 'ExitPlanMode',
   NotebookEdit: 'NotebookEdit',
+  PowerShell: 'PowerShell',
+  Monitor: 'Monitor',
+  CronCreate: 'CronCreate',
+  CronList: 'CronList',
+  CronDelete: 'CronDelete',
+  Config: 'Config',
+  SlashCommand: 'SlashCommand',
+  DiscoverSlashCommands: 'DiscoverSlashCommands',
 } as const
 
 export type ToolName = (typeof TOOL_NAMES)[keyof typeof TOOL_NAMES]
@@ -47,6 +55,9 @@ export const CC_READ_ONLY_TOOLS: ReadonlySet<ToolName> = new Set([
   'TodoWrite', // metadata-only mutation
   'BashOutput', // reading bg job output is read-only
   'Agent', // sub-agent runs under its own permission mode
+  'CronList', // listing only
+  'DiscoverSlashCommands', // listing only
+  'Config', // safe — gated by supportedSettings whitelist
 ])
 
 export const CC_WRITE_TOOLS: ReadonlySet<ToolName> = new Set([
@@ -56,6 +67,11 @@ export const CC_WRITE_TOOLS: ReadonlySet<ToolName> = new Set([
   'Edit',
   'NotebookEdit',
   'ExitPlanMode',
+  'PowerShell',
+  'Monitor', // spawns a process — not safe in plan mode
+  'CronCreate', // schedules future side effects
+  'CronDelete', // removes scheduled work
+  'SlashCommand', // expands an arbitrary template; could include Bash/Edit
 ])
 
 /**
@@ -245,6 +261,22 @@ Limits: ≤ 5 questions per call, each with 2-6 short options.`,
   ExitPlanMode: `Use this tool to exit plan mode and submit your plan to the user for approval.
 
 You should only call this tool once you have written your plan and are ready to execute it. The user must approve the plan before you start making changes.`,
+
+  PowerShell: `Run a PowerShell command and return its output. Windows-native equivalent of Bash with a persistent shell — Set-Location, $env:VAR, and module imports carry across calls. Prefer dedicated tools (Read/Edit/Glob/Grep) over PowerShell when possible.`,
+
+  Monitor: `Start a long-running background process whose stdout/stderr stream to a file. Use for "watch X and let me know when it changes" tasks (tail -f, polling loops, file watchers). Returns a shell_id and an output file path; you'll get a system-reminder when the process exits.`,
+
+  CronCreate: `Schedule a future agent invocation. The agent gets a fresh turn with the given prompt at the scheduled time. Schedule formats: ISO date, "in N units", "every N units", "@hourly", "@daily".`,
+
+  CronList: `List all pending scheduled jobs (id, schedule, next fire time, prompt preview).`,
+
+  CronDelete: `Remove a scheduled cron job by id. Stops repeating jobs immediately.`,
+
+  Config: `Get or set a whitelisted Claude Code configuration setting. Pass only \`key\` to read, or \`key\` + \`value\` to write. Writes are NOT hot-reloaded — the running agent keeps its old config until re-created.`,
+
+  SlashCommand: `Invoke a user-defined custom command from .claude/commands/. Returns the EXPANDED prompt template (with $ARGUMENTS substituted, !bash inlined, @file inlined). Treat the result as instructions you should follow. Use DiscoverSlashCommands first if you don't know what's available.`,
+
+  DiscoverSlashCommands: `List user-defined custom commands installed in .claude/commands/. Returns name + description for each.`,
 
   NotebookEdit: `Modify a Jupyter notebook (.ipynb) cell.
 

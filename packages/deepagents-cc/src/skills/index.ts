@@ -16,3 +16,4 @@ export {
   SKILL_TOOL_NAME,
   type SkillToolsOptions,
 } from './skillTool.js'
+export { createSkillActivator, type SkillActivator } from './activation.js'

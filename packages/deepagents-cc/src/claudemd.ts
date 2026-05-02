@@ -17,6 +17,8 @@ export interface ClaudeMdEntry {
   path: string
   content: string
   scope: 'user' | 'project'
+  /** Last-modified time of the file when we read it. */
+  mtimeMs: number
 }
 
 export interface LoadClaudeMdOptions {
@@ -42,9 +44,14 @@ export function loadClaudeMd(
     const absolute = userPath.startsWith('~/')
       ? path.join(os.homedir(), userPath.slice(2))
       : userPath
-    const content = readIfExists(absolute, maxBytes)
-    if (content !== null) {
-      entries.push({ path: absolute, content, scope: 'user' })
+    const result = readIfExists(absolute, maxBytes)
+    if (result !== null) {
+      entries.push({
+        path: absolute,
+        content: result.content,
+        scope: 'user',
+        mtimeMs: result.mtimeMs,
+      })
       break // Only load the first matching user file.
     }
   }
@@ -55,9 +62,14 @@ export function loadClaudeMd(
   while (true) {
     for (const filename of PROJECT_FILENAMES) {
       const candidate = path.join(current, filename)
-      const content = readIfExists(candidate, maxBytes)
-      if (content !== null) {
-        stack.push({ path: candidate, content, scope: 'project' })
+      const result = readIfExists(candidate, maxBytes)
+      if (result !== null) {
+        stack.push({
+          path: candidate,
+          content: result.content,
+          scope: 'project',
+          mtimeMs: result.mtimeMs,
+        })
         break // Only one of CLAUDE.md / AGENTS.md per directory.
       }
     }
@@ -73,7 +85,10 @@ export function loadClaudeMd(
   return entries
 }
 
-function readIfExists(filePath: string, maxBytes: number): string | null {
+function readIfExists(
+  filePath: string,
+  maxBytes: number,
+): { content: string; mtimeMs: number } | null {
   try {
     const stat = fs.statSync(filePath)
     if (!stat.isFile()) return null
@@ -82,9 +97,10 @@ function readIfExists(filePath: string, maxBytes: number): string | null {
       const buffer = Buffer.alloc(Math.min(stat.size, maxBytes))
       fs.readSync(fd, buffer, 0, buffer.length, 0)
       const truncated = stat.size > maxBytes
-      return truncated
+      const text = truncated
         ? `${buffer.toString('utf8')}\n\n[truncated: file exceeds ${maxBytes} bytes]`
         : buffer.toString('utf8')
+      return { content: text, mtimeMs: stat.mtimeMs }
     } finally {
       fs.closeSync(fd)
     }
@@ -94,12 +110,33 @@ function readIfExists(filePath: string, maxBytes: number): string | null {
 }
 
 /**
+ * Format a "this is a snapshot" age note for project memory. cc surfaces
+ * the file's age so the model knows whether the conventions it's reading
+ * are weeks-old (treat as authoritative) or months-old (might be stale).
+ */
+export function memoryFreshnessNote(mtimeMs: number, now = Date.now()): string {
+  const ms = Math.max(0, now - mtimeMs)
+  const day = 24 * 60 * 60 * 1000
+  const days = Math.floor(ms / day)
+  if (days < 1) return '(snapshot from today)'
+  if (days === 1) return '(snapshot from 1 day ago)'
+  if (days < 30) return `(snapshot from ${days} days ago)`
+  const months = Math.floor(days / 30)
+  if (months === 1) return '(snapshot from 1 month ago)'
+  return `(snapshot from ${months} months ago)`
+}
+
+/**
  * Format loaded CLAUDE.md entries into a single block for the system prompt.
+ * Each entry is prefixed with a freshness note so the model knows how old
+ * the snapshot is.
  */
 export function formatClaudeMd(entries: ClaudeMdEntry[]): string {
   if (entries.length === 0) return ''
   const sections = entries.map(entry => {
-    const header = `# ${entry.scope === 'user' ? 'User' : 'Project'} memory: ${entry.path}`
+    const scope = entry.scope === 'user' ? 'User' : 'Project'
+    const freshness = memoryFreshnessNote(entry.mtimeMs)
+    const header = `# ${scope} memory: ${entry.path} ${freshness}`
     return `${header}\n${entry.content.trim()}`
   })
   return sections.join('\n\n---\n\n')

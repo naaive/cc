@@ -15,6 +15,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { HookConfig } from './middleware/hooks.js'
 import type { PermissionMode } from './permissionMode.js'
+import type { PermissionRule } from './permissionRules.js'
 
 export interface Settings {
   /** Default model id. */
@@ -31,6 +32,12 @@ export interface Settings {
   bashDeny?: string[]
   /** Web fetch allow-host suffixes. */
   webFetchAllowHosts?: string[]
+  /** Fine-grained permission rules (per-tool + per-arg pattern). First match wins. */
+  permissions?: PermissionRule[]
+  /** Additional directories the fs tools may operate on, beyond cwd. */
+  additionalDirectories?: string[]
+  /** Output style preset. */
+  outputStyle?: string
   /** Hook configuration. Only inline functions are skipped at load time. */
   hooks?: HookConfig
   /** Custom env vars exported into the agent's process.env at boot. */
@@ -115,6 +122,11 @@ export function mergeSettings(a: Settings, b: Settings): Settings {
     bashAllow: mergeArrays(a.bashAllow, b.bashAllow),
     bashDeny: mergeArrays(a.bashDeny, b.bashDeny),
     webFetchAllowHosts: mergeArrays(a.webFetchAllowHosts, b.webFetchAllowHosts),
+    permissions: mergeArrays(a.permissions, b.permissions),
+    additionalDirectories: mergeArrays(
+      a.additionalDirectories,
+      b.additionalDirectories,
+    ),
     hooks: mergeHooks(a.hooks, b.hooks),
     env: { ...(a.env ?? {}), ...(b.env ?? {}) },
     extras: { ...(a.extras ?? {}), ...(b.extras ?? {}) },

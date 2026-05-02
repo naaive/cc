@@ -11,6 +11,8 @@
 
 import type { Todo } from '../tools/writeTodos.js'
 import type { PermissionMode } from '../permissionMode.js'
+import type { SkillActivator } from '../skills/activation.js'
+import { readSkillBody, type SkillMetadata } from '../skills/loader.js'
 
 export interface ReminderContext {
   state: Record<string, unknown>
@@ -102,6 +104,40 @@ export const ccReminders = {
         if (ctx.turn - last < everyNTurns) return null
         ctx.state[key] = ctx.turn
         return text
+      },
+    }
+  },
+
+  /**
+   * Conditional skill activation. Drains the activator and emits each
+   * pending skill's body as a single reminder block. cc fires this once
+   * per skill per session, so the body lands in the conversation right
+   * after the Read that triggered it.
+   */
+  conditionalSkillActivation(
+    activator: SkillActivator,
+    getSkills: () => SkillMetadata[],
+  ): Reminder {
+    return {
+      name: 'skill-activated',
+      shouldFire() {
+        const drained = activator.drain()
+        if (drained.length === 0) return null
+        const skills = getSkills()
+        const bodies = drained
+          .map(name => {
+            const meta = skills.find(s => s.name === name)
+            if (!meta) return null
+            try {
+              const body = readSkillBody(meta.path)
+              return `## Skill activated: ${name}\n${meta.description}\n\n${body}`
+            } catch {
+              return null
+            }
+          })
+          .filter((s): s is string => s !== null)
+        if (bodies.length === 0) return null
+        return bodies.join('\n\n---\n\n')
       },
     }
   },

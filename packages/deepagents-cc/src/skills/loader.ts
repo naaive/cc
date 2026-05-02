@@ -33,6 +33,8 @@ export interface SkillMetadata {
   license?: string
   compatibility?: string
   allowedTools?: string
+  /** Glob patterns that, when matched by a Read, auto-activate this skill. */
+  activatePaths?: string[]
   metadata?: Record<string, string>
 }
 
@@ -129,6 +131,15 @@ export function parseSkillMetadata(
   if (typeof fm.compatibility === 'string') out.compatibility = fm.compatibility
   if (typeof fm['allowed-tools'] === 'string')
     out.allowedTools = fm['allowed-tools']
+  // Conditional activation: a comma-separated list of glob patterns. When
+  // the agent reads a file matching any pattern, the skill body is queued
+  // as a system reminder for the next turn (cc behavior).
+  if (typeof fm['activate-paths'] === 'string') {
+    out.activatePaths = fm['activate-paths']
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean)
+  }
   return out
 }
 

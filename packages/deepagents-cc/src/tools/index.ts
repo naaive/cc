@@ -76,6 +76,7 @@ export {
   applyDeterministicEdit,
   ensureAbsolute,
   isBinaryFile,
+  isWithinAllowedRoots,
   makeFileStateCache,
   readTextFile,
   truncateLine,
@@ -108,3 +109,13 @@ export {
   type TruncationPolicy,
 } from './truncationPolicy.js'
 export { FILE_UNCHANGED_STUB } from './readFile.js'
+export {
+  findSimilarFile,
+  levenshtein,
+  pathRecoveryHint,
+  suggestPathUnderCwd,
+} from './pathRecovery.js'
+export {
+  createSlashCommandTool,
+  type SlashCommandToolOptions,
+} from './slashCommandTool.js'

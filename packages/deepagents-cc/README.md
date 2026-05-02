@@ -23,6 +23,15 @@ Tool names, system prompt structure, prompt-cache strategy, system-reminder inje
 | **Skills**             | Anthropic Agent Skills format. `~/.claude/skills/<name>/SKILL.md` and `<repo>/.claude/skills/<name>/SKILL.md` are loaded (project shadows user). The `DiscoverSkills` and `Skill` tools expose them on demand. |
 | **Denial tracking**    | When a tool call gets denied (plan-mode block, hook block, user reject), we fingerprint the call and short-circuit identical retries with "you already tried this; pick a different approach".                |
 | **Auto-compact warning** | A reminder fires once when the conversation crosses ~75% of the summarization trigger, telling the model to wrap up loose ends before history collapses.                                                      |
+| **SlashCommand tool**  | Opt-in (`exposeSlashCommandTool: true`). The model can call `/init`, `/compact`, `/memory`, `/mode` itself when appropriate.                                                                                  |
+| **Output styles**      | `concise` (default), `explanatory`, `learning`, plus host-defined custom styles. Selected via `outputStyle: "..."` or settings.                                                                                  |
+| **Fine-grained perms** | Per-tool + per-arg pattern allow/deny rules (`Bash command="rm -rf*"` deny; `Edit file_path="/etc/**"` deny). Glob match: `*`, `**`, `?`, `[abc]`, AND across fields, first match wins.                            |
+| **additionalDirectories** | fs tools allowed beyond `cwd` for monorepo / scratch-dir use.                                                                                                                                              |
+| **Path-recovery hints** | Read/Write/Edit ENOENT errors include "Did you mean ...?" suggestions (Levenshtein on the parent dir + basename walk under cwd).                                                                              |
+| **CLAUDE.md freshness** | Each loaded memory entry is annotated `(snapshot from N days ago)` so the model knows whether conventions are fresh or stale.                                                                                  |
+| **Image / PDF / Notebook in Read** | PNG/JPG/GIF/WEBP return as image content blocks (model sees them); PDF returns as document content block; .ipynb is rendered cell-by-cell with outputs.                                            |
+| **Conditional skill activation** | Skill `activate-paths: src/auth/**, **/*.sql` triggers a one-shot reminder when Read touches a matching path.                                                                                          |
+| **MCP**                | Pluggable via `@langchain/mcp-adapters`. `setupMcpServers({ slack: {...} })` returns langchain tools; pass them as `deferredTools` so the model loads MCP schemas only when it needs them.                       |
 | **Settings**           | `~/.claude/settings.json` + `<repo>/.claude/settings.json` + `<repo>/.claude/settings.local.json`, merged in that order.                                                                                         |
 | **Read/Edit/Write**    | Real disk. `Read` returns `cat -n` line-numbered output and tracks mtime. `Edit` requires a prior `Read` of the file (stale-edit guard) and rejects non-unique `old_string` unless `replace_all=true`. `Write` is atomic. |
 | **Bash**               | Persistent shell — `cd`, exports, shell options carry across calls. `run_in_background: true` spawns a detached child whose stdout/stderr the model can poll with `BashOutput` and stop with `KillShell`.        |
@@ -193,11 +202,35 @@ hooks → permissionMode → denialTracking → resultEviction →
 [tokenSnapshot] → contextEngineering → summarization → promptCache → anthropicCache
 ```
 
+## MCP
+
+We use `@langchain/mcp-adapters` (langchain's official MCP client) — no need to reinvent the protocol layer. The package exposes a thin wrapper:
+
+```ts
+import { createClaudeCodeAgent, setupMcpServers } from "@claude-code-best/cc-on-langchain";
+
+const mcp = await setupMcpServers({
+  slack: { command: "npx", args: ["-y", "@modelcontextprotocol/server-slack"] },
+  github: { command: "npx", args: ["-y", "@modelcontextprotocol/server-github"] },
+});
+
+const { agent } = createClaudeCodeAgent({
+  // MCP tools land in the deferred registry — system prompt only lists names,
+  // schemas are loaded via ToolSearch when the model needs them.
+  deferredTools: mcp.tools,
+  mcpClient: mcp.client,
+});
+
+try { await agent.invoke({ messages }) } finally { await mcp.stop() }
+```
+
+`@langchain/mcp-adapters` is an **optional peer dependency** — only install it when you actually use MCP.
+
 ## Tests
 
 ```bash
 $ bun test
- 157 pass
+ 195 pass
  0 fail
 ```
 

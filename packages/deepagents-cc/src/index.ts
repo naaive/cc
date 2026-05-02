@@ -89,3 +89,21 @@ export * from './tools/index.js'
 export * from './middleware/index.js'
 export * from './slashCommands/index.js'
 export * from './skills/index.js'
+export * from './mcp/index.js'
+
+// Output styles & permission rules.
+export {
+  OUTPUT_STYLES,
+  formatOutputStyleSection,
+  getOutputStyle,
+  type OutputStyle,
+} from './outputStyles.js'
+export {
+  evaluateRules,
+  type PermissionRule,
+  type PermissionRuleMode,
+  type RuleDecision,
+} from './permissionRules.js'
+
+// claudemd freshness helper.
+export { memoryFreshnessNote } from './claudemd.js'

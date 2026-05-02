@@ -11,6 +11,7 @@ import {
   applyDeterministicEdit,
   ensureAbsolute,
   isBinaryFile,
+  isWithinAllowedRoots,
   statMtime,
   writeTextFile,
   type FileStateCache,
@@ -31,12 +32,18 @@ const schema = z.object({
 
 export interface EditToolOptions {
   fileStateCache: FileStateCache
+  cwd?: string
+  additionalDirectories?: readonly string[]
 }
 
 export function createEditTool(options: EditToolOptions) {
+  const cwd = options.cwd ?? process.cwd()
   return tool(
     (input: z.infer<typeof schema>) => {
       const abs = ensureAbsolute(input.file_path, 'file_path')
+      if (!isWithinAllowedRoots(abs, cwd, options.additionalDirectories ?? [])) {
+        throw new Error(`${abs} is outside the allowed roots (cwd=${cwd}).`)
+      }
       const known = options.fileStateCache.get(abs)
       if (known === undefined) {
         throw new Error(`Read ${abs} before editing it.`)

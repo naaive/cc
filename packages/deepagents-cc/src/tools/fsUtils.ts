@@ -46,6 +46,23 @@ export function ensureAbsolute(p: string, label = 'path'): string {
 }
 
 /**
+ * Boundary check: is `target` inside `cwd` or any of `additionalDirectories`?
+ *
+ * cc lets the host whitelist extra directories (e.g. when working across
+ * sibling repos in a monorepo, or when scratch files live in /tmp). This
+ * helper centralises the check so every fs tool gives the same answer.
+ */
+export function isWithinAllowedRoots(
+  target: string,
+  cwd: string,
+  additionalDirectories: readonly string[] = [],
+): boolean {
+  const abs = path.resolve(target)
+  const roots = [cwd, ...additionalDirectories].map(r => path.resolve(r))
+  return roots.some(root => abs === root || abs.startsWith(`${root}/`))
+}
+
+/**
  * Detect binary files using a NUL-byte heuristic over the first 8KB.
  * Faster than mime-type sniffing and good enough for our use.
  */

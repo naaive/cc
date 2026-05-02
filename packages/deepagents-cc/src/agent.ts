@@ -64,10 +64,16 @@ import {
 } from './tools/index.js'
 import {
   createDiscoverSkillsTool,
+  createSkillActivator,
   createSkillTool,
   listSkills,
+  type SkillActivator,
   type SkillMetadata,
 } from './skills/index.js'
+import { createSlashCommandTool } from './tools/slashCommandTool.js'
+import { getOutputStyle, formatOutputStyleSection, type OutputStyle } from './outputStyles.js'
+import type { PermissionRule } from './permissionRules.js'
+import type { MultiServerMCPClient } from './mcp/index.js'
 import {
   ccReminders,
   createContextEngineeringMiddleware,
@@ -138,6 +144,24 @@ export interface CreateClaudeCodeAgentParams {
     warnAt?: number
     triggerAt?: number
   } | false
+  /** Fine-grained permission rules. Combined with `settings.permissions`. */
+  permissionRules?: PermissionRule[]
+  /** Allow fs tools to operate on directories beyond cwd. */
+  additionalDirectories?: string[]
+  /** Output style preset name, or a custom OutputStyle object. */
+  outputStyle?: string | OutputStyle
+  /** Custom output styles registered alongside the built-ins. */
+  outputStyles?: Record<string, OutputStyle>
+  /** Add the SlashCommand tool so the model can invoke /init, /compact, ... */
+  exposeSlashCommandTool?: boolean
+  /**
+   * Optional MCP client (from `setupMcpServers()`). We keep MCP setup
+   * separate so the synchronous factory stays synchronous.
+   *
+   * MCP tools should be passed via `deferredTools` so the model loads
+   * their schemas on demand via `ToolSearch`.
+   */
+  mcpClient?: MultiServerMCPClient
 }
 
 export interface ClaudeCodeAgentBundle {
@@ -154,6 +178,10 @@ export interface ClaudeCodeAgentBundle {
   jobRegistry: BackgroundJobRegistry
   resultStore: ResultStore | null
   deferredRegistry: DeferredToolRegistry | null
+  /** MCP client passed in by the host (if any) — owner must call `.close()`. */
+  mcpClient: MultiServerMCPClient | null
+  /** Conditional skill activator (null when no activatePaths-equipped skills). */
+  skillActivator: SkillActivator | null
 }
 
 export function createClaudeCodeAgent(
@@ -200,8 +228,8 @@ export function createClaudeCodeAgent(
     deferredRegistry.registerAll(params.deferredTools)
   }
 
-  // Build the system prompt — appendix carries the deferred-tool block
-  // and the skill listing so they live alongside the env section.
+  // Build the system prompt — appendix carries the deferred-tool block,
+  // the skill listing, and the output-style preset.
   const promptAppendixParts: string[] = []
   if (params.systemPromptAppendix) promptAppendixParts.push(params.systemPromptAppendix)
   if (deferredRegistry) {
@@ -211,6 +239,14 @@ export function createClaudeCodeAgent(
   if (skills.length > 0) {
     promptAppendixParts.push(buildSkillsListing(skills))
   }
+  // Output style: resolve preset name → OutputStyle, then append.
+  const styleArg = params.outputStyle ?? settings.outputStyle
+  const style: OutputStyle | null =
+    typeof styleArg === 'string'
+      ? getOutputStyle(styleArg, params.outputStyles)
+      : (styleArg ?? null)
+  if (style) promptAppendixParts.push(formatOutputStyleSection(style))
+
   const systemPrompt = buildSystemPrompt({
     env,
     claudeMd,
@@ -240,15 +276,40 @@ export function createClaudeCodeAgent(
     if (isEnabled(TOOL_NAMES.KillShell)) ccTools.push(bundle.killShell as StructuredTool)
   }
 
+  // Skill activator — only created when skills declare activate-paths.
+  const skillActivator =
+    skills.some(s => s.activatePaths && s.activatePaths.length > 0)
+      ? createSkillActivator(skills)
+      : null
+
+  // Merge additionalDirectories from settings + params.
+  const additionalDirectories = [
+    ...(settings.additionalDirectories ?? []),
+    ...(params.additionalDirectories ?? []),
+  ]
+
   if (isEnabled(TOOL_NAMES.Read))
     ccTools.push(
       createReadTool({
         fileStateCache,
         resultStore: resultStore ?? undefined,
+        cwd,
+        additionalDirectories,
+        onFileRead: skillActivator
+          ? abs => {
+              skillActivator.notice(abs)
+            }
+          : undefined,
       }),
     )
-  if (isEnabled(TOOL_NAMES.Write)) ccTools.push(createWriteTool({ fileStateCache }))
-  if (isEnabled(TOOL_NAMES.Edit)) ccTools.push(createEditTool({ fileStateCache }))
+  if (isEnabled(TOOL_NAMES.Write))
+    ccTools.push(
+      createWriteTool({ fileStateCache, cwd, additionalDirectories }),
+    )
+  if (isEnabled(TOOL_NAMES.Edit))
+    ccTools.push(
+      createEditTool({ fileStateCache, cwd, additionalDirectories }),
+    )
   if (isEnabled(TOOL_NAMES.NotebookEdit)) ccTools.push(createNotebookEditTool())
   if (isEnabled(TOOL_NAMES.Glob)) ccTools.push(createGlobTool({ cwd }))
   if (isEnabled(TOOL_NAMES.Grep)) ccTools.push(createGrepTool({ cwd }))
@@ -310,6 +371,12 @@ export function createClaudeCodeAgent(
     )
   }
 
+  // SlashCommand tool — opt-in. cc exposes it; we leave it off unless the
+  // host explicitly wants the model to be able to fire commands itself.
+  if (params.exposeSlashCommandTool) {
+    ccTools.push(createSlashCommandTool({ cwd }) as StructuredTool)
+  }
+
   // Collision check vs user tools.
   const userTools = params.tools ?? []
   const userNames = new Set(userTools.map(t => t.name))
@@ -337,6 +404,10 @@ export function createClaudeCodeAgent(
     createPermissionModeMiddleware({
       initialMode:
         params.initialPermissionMode ?? settings.permissionMode ?? 'default',
+      rules: [
+        ...(settings.permissions ?? []),
+        ...(params.permissionRules ?? []),
+      ],
     }),
   )
 
@@ -391,6 +462,11 @@ export function createClaudeCodeAgent(
       }),
     )
   }
+  if (skillActivator) {
+    reminders.push(
+      ccReminders.conditionalSkillActivation(skillActivator, () => skills),
+    )
+  }
   reminders.push(...(params.reminders ?? []))
 
   middleware.push(createContextEngineeringMiddleware({ reminders }))
@@ -435,6 +511,8 @@ export function createClaudeCodeAgent(
     jobRegistry,
     resultStore,
     deferredRegistry,
+    mcpClient: params.mcpClient ?? null,
+    skillActivator,
   }
 }
 

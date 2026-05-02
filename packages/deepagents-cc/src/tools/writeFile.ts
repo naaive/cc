@@ -9,6 +9,7 @@ import { z } from 'zod/v4'
 import { TOOL_DESCRIPTIONS, TOOL_NAMES } from './ccToolNames.js'
 import {
   ensureAbsolute,
+  isWithinAllowedRoots,
   statMtime,
   writeTextFile,
   type FileStateCache,
@@ -21,12 +22,20 @@ const schema = z.object({
 
 export interface WriteToolOptions {
   fileStateCache: FileStateCache
+  cwd?: string
+  additionalDirectories?: readonly string[]
 }
 
 export function createWriteTool(options: WriteToolOptions) {
+  const cwd = options.cwd ?? process.cwd()
   return tool(
     (input: z.infer<typeof schema>) => {
       const abs = ensureAbsolute(input.file_path, 'file_path')
+      if (!isWithinAllowedRoots(abs, cwd, options.additionalDirectories ?? [])) {
+        throw new Error(
+          `${abs} is outside the allowed roots (cwd=${cwd}).`,
+        )
+      }
       const existing = statMtime(abs)
       if (existing !== undefined) {
         const known = options.fileStateCache.get(abs)

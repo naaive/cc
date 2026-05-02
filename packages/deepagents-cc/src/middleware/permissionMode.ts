@@ -1,10 +1,14 @@
 /**
- * Permission-mode middleware — gate write tools by mode.
+ * Permission-mode middleware — gate tool calls by mode + fine-grained rules.
  *
- * Sits in the deepagents middleware chain just before subagents/fs. When
- * the agent calls a write tool while in plan mode, we synthesize a tool
- * result that explains the denial and skip the actual call. The agent
- * sees the deny string in its conversation and adapts.
+ * Two layers, evaluated in order:
+ *   1. Per-tool/per-arg rules (from settings.permissions). First match wins.
+ *      An "allow" rule short-circuits the mode gate; a "deny" rule rejects.
+ *   2. Mode classifier (read vs write vs unknown). plan mode blocks writes.
+ *
+ * cc evaluates rules first because that's the strongest user signal:
+ * a user-defined deny on `Bash command="rm -rf*"` should fire even in
+ * `bypassPermissions` mode.
  */
 
 import {
@@ -18,12 +22,17 @@ import {
   PERMISSION_MODES,
   type PermissionMode,
 } from '../permissionMode.js'
+import {
+  evaluateRules,
+  type PermissionRule,
+} from '../permissionRules.js'
 
 export interface PermissionModeMiddlewareOptions {
-  /** Initial mode. Defaults to "default". */
   initialMode?: PermissionMode
   /** Tools the host wants to mark read-only beyond the built-ins. */
   extraReadOnly?: string[]
+  /** Fine-grained rules. First match wins. Empty array = no rule layer. */
+  rules?: readonly PermissionRule[]
   /** Optional per-call hook so a UI can prompt the user before destructive ops. */
   onDenied?: (toolName: string, reason: string) => void
 }
@@ -37,17 +46,16 @@ export function createPermissionModeMiddleware(
   options: PermissionModeMiddlewareOptions = {},
 ): AgentMiddleware {
   const extra = new Set(options.extraReadOnly ?? [])
+  const rules = options.rules ?? []
   const initial = options.initialMode ?? 'default'
 
   return createMiddleware({
     name: 'PermissionModeMiddleware',
     stateSchema,
-    // Set the initial mode if state wasn't seeded.
     beforeAgent: (state: { permissionMode?: PermissionMode }) => {
       if (state.permissionMode == null) return { permissionMode: initial }
       return undefined
     },
-    // Wrap every tool call to gate writes in plan mode.
     wrapToolCall: async (
       request: {
         toolCall: { name: string; id: string; args: unknown }
@@ -55,6 +63,23 @@ export function createPermissionModeMiddleware(
       },
       handler: (req: typeof request) => Promise<ToolMessage | unknown>,
     ) => {
+      // Layer 1: per-tool rules.
+      const rule = evaluateRules(request.toolCall.name, request.toolCall.args, rules)
+      if (rule.mode === 'deny') {
+        const reason = rule.reason ?? 'Denied by permission rule.'
+        options.onDenied?.(request.toolCall.name, reason)
+        return new ToolMessage({
+          content: reason,
+          tool_call_id: request.toolCall.id,
+          name: request.toolCall.name,
+          status: 'error',
+        })
+      }
+      if (rule.mode === 'allow') {
+        return handler(request)
+      }
+
+      // Layer 2: mode classifier.
       const mode = request.state.permissionMode ?? initial
       const decision = decide(mode, request.toolCall.name, extra)
       if (!decision.allowed) {

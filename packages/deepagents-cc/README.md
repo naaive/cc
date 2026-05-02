@@ -153,7 +153,14 @@ cc injects `<system-reminder>` blocks into the user's turn so the model sees jus
 - **`todo-state`**: re-injects the FULL todo list every turn (cc's actual behavior). The model is expected to treat each turn's reminder as canonical.
 - **`todo-stale-nudge`**: when no todo list exists and the conversation has gone N turns, suggest using `TodoWrite`.
 - **`plan-mode-active`**: persistent banner reminding the model it's read-only until `ExitPlanMode`.
+- **`file-state`**: every turn the FileStateCache changed, list "files you've already Read this session" (with mtimes, capped) so the model doesn't blindly re-Read.
+- **`cwd-drift`**: when the persistent shell's live cwd diverges from the cwd baked into the env block (because the model ran `cd` somewhere), fire a one-time reminder with the new cwd + how to return.
+- **`compaction-applied`**: after any compaction tier fires, list what was preserved and how many tokens were saved.
+- **`auto-compact-warning`**: pre-warning when conversation crosses ~75% of the summarization trigger.
+- **`skill-activated`**: when a skill's `activate-paths` matches a Read, inject its body once.
 - **custom**: `ccReminders.custom("ci-mode", "You are running in CI; do NOT push to main.")` — fires every N turns.
+
+Plus, the `Edit` tool's "old_string is not unique" error now lists every match with line + col + one-line context (capped at 5, with a "more" marker when applicable) — same as cc, so the model can pick the disambiguation it needs without another Read round-trip.
 
 ```ts
 import { createClaudeCodeAgent, ccReminders } from "@claude-code-best/cc-on-langchain";
@@ -310,7 +317,7 @@ Boundary safety: T4 never cuts between an `AIMessage` with `tool_calls` and the 
 
 ```bash
 $ bun test
- 207 pass
+ 231 pass
  0 fail
 ```
 

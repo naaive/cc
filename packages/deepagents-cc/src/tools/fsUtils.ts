@@ -25,6 +25,10 @@ export const MAX_LINE_WIDTH = 2000
 export interface FileStateCache {
   get(absPath: string): number | undefined
   set(absPath: string, mtimeMs: number): void
+  /** Iterate (path, mtimeMs) pairs — used by the file-state reminder. */
+  entries(): Iterable<[string, number]>
+  /** Number of cached entries. */
+  size(): number
 }
 
 export function makeFileStateCache(): FileStateCache {
@@ -34,6 +38,8 @@ export function makeFileStateCache(): FileStateCache {
     set: (p, t) => {
       m.set(p, t)
     },
+    entries: () => m.entries(),
+    size: () => m.size,
   }
 }
 
@@ -204,6 +210,10 @@ export function statMtime(absPath: string): number | undefined {
  *  - oldString isn't found
  *  - oldString occurs more than once (ambiguity → require more context)
  *  - oldString === newString (no-op edit)
+ *
+ * On non-unique error, the message lists every match location with line
+ * number + a one-line context snippet so the model can decide on the spot
+ * which occurrence to disambiguate (cc's "show me where" behavior).
  */
 export function applyDeterministicEdit(
   source: string,
@@ -228,9 +238,74 @@ export function applyDeterministicEdit(
   if (first === -1) throw new Error('old_string not found in file')
   const second = source.indexOf(oldString, first + oldString.length)
   if (second !== -1) {
+    const matches = locateAllMatches(source, oldString, 5)
+    const list = matches
+      .map(
+        m =>
+          `  - line ${m.line}: ${truncateLine(m.contextLine, 120)}`,
+      )
+      .join('\n')
+    const more =
+      matches.length === 5 && hasMoreThan(source, oldString, 5)
+        ? '\n  ... (more)'
+        : ''
     throw new Error(
-      'old_string is not unique in the file — provide more surrounding context, or pass replace_all=true',
+      `old_string is not unique in the file (${countOccurrences(
+        source,
+        oldString,
+      )} matches). Add more surrounding context to disambiguate, or pass replace_all=true. Match locations:\n${list}${more}`,
     )
   }
   return source.slice(0, first) + newString + source.slice(first + oldString.length)
+}
+
+/** Count + collect line numbers of every occurrence of `needle` in `source`. */
+export function locateAllMatches(
+  source: string,
+  needle: string,
+  cap: number,
+): Array<{ line: number; col: number; contextLine: string }> {
+  const out: Array<{ line: number; col: number; contextLine: string }> = []
+  let pos = 0
+  while (out.length < cap) {
+    const idx = source.indexOf(needle, pos)
+    if (idx === -1) break
+    const upTo = source.slice(0, idx)
+    const line = upTo.split('\n').length
+    const lastNewline = upTo.lastIndexOf('\n')
+    const col = idx - (lastNewline + 1) + 1
+    const lineStart = lastNewline + 1
+    const lineEnd = source.indexOf('\n', idx)
+    const contextLine = source.slice(
+      lineStart,
+      lineEnd === -1 ? source.length : lineEnd,
+    )
+    out.push({ line, col, contextLine })
+    pos = idx + needle.length
+  }
+  return out
+}
+
+function countOccurrences(source: string, needle: string): number {
+  let n = 0
+  let pos = 0
+  while (true) {
+    const idx = source.indexOf(needle, pos)
+    if (idx === -1) return n
+    n++
+    pos = idx + needle.length
+  }
+}
+
+function hasMoreThan(source: string, needle: string, n: number): boolean {
+  let count = 0
+  let pos = 0
+  while (count <= n) {
+    const idx = source.indexOf(needle, pos)
+    if (idx === -1) return false
+    count++
+    if (count > n) return true
+    pos = idx + needle.length
+  }
+  return false
 }

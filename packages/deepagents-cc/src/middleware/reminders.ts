@@ -13,6 +13,7 @@ import type { Todo } from '../tools/writeTodos.js'
 import type { PermissionMode } from '../permissionMode.js'
 import type { SkillActivator } from '../skills/activation.js'
 import { readSkillBody, type SkillMetadata } from '../skills/loader.js'
+import type { FileStateCache } from '../tools/fsUtils.js'
 
 export interface ReminderContext {
   state: Record<string, unknown>
@@ -145,6 +146,66 @@ export const ccReminders = {
   },
 
   /**
+   * Proactive `<file_state>` reminder. cc surfaces a one-line listing of
+   * "files you've already read this session" so the model doesn't blindly
+   * Read them again. Fires every turn the cache changed; capped at 30
+   * entries to keep the reminder small.
+   *
+   * The listing intentionally includes mtimes so the model can correlate
+   * a "did this file change?" question against its prior read snapshot.
+   */
+  fileStateContext(
+    fileStateCache: FileStateCache & { entries?: () => Iterable<[string, number]> },
+    cap = 30,
+  ): Reminder {
+    let lastFingerprint = ''
+    return {
+      name: 'file-state',
+      shouldFire(ctx) {
+        const entries = collectCacheEntries(fileStateCache)
+        if (entries.length === 0) return null
+        // Hash the (path, mtime) pairs so we re-emit only when something
+        // changed (new read, mtime advanced, etc.).
+        const fp = entries
+          .map(([p, m]) => `${p}@${m}`)
+          .sort()
+          .join('|')
+        if (fp === lastFingerprint) return null
+        lastFingerprint = fp
+        const shown = entries.slice(0, cap)
+        const lines = shown.map(([p, m]) => `  - ${p} (mtime ${formatMtime(m)})`)
+        const tail =
+          entries.length > cap
+            ? `\n  ... ${entries.length - cap} more`
+            : ''
+        void ctx.turn // silence unused warning
+        return `Files already Read this session (no need to re-Read unless mtime changed):\n${lines.join('\n')}${tail}`
+      },
+    }
+  },
+
+  /**
+   * Cwd drift reminder. The persistent shell tracks the live cwd after
+   * every Bash call (because the shell honors `cd`). The system prompt's
+   * env block was baked at construction time. When the live cwd diverges
+   * — usually because the model ran `cd somewhere` — the model's mental
+   * model of "where am I" silently goes stale. Fires once per drift event.
+   */
+  cwdDrift(getLiveCwd: () => string, baselineCwd: string): Reminder {
+    let lastFiredFor = ''
+    return {
+      name: 'cwd-drift',
+      shouldFire() {
+        const live = getLiveCwd()
+        if (live === baselineCwd) return null
+        if (live === lastFiredFor) return null
+        lastFiredFor = live
+        return `Working directory has drifted from ${baselineCwd} to ${live} (likely a Bash \`cd\`). The Read/Write/Edit tools still take ABSOLUTE paths — the drift only affects relative-path bash invocations. If the new cwd is incorrect, run \`cd ${baselineCwd}\` to return.`
+      },
+    }
+  },
+
+  /**
    * Auto-compact pre-warning. Fires when the conversation's rough token
    * count exceeds `warnAt` but is still under the summarization trigger.
    * Lets the model know it should wrap up loose ends or write findings to
@@ -179,3 +240,15 @@ export const ccReminders = {
 }
 
 export type CCReminderFactory = typeof ccReminders
+
+function collectCacheEntries(
+  cache: FileStateCache & { entries?: () => Iterable<[string, number]> },
+): Array<[string, number]> {
+  if (typeof cache.entries === 'function') return [...cache.entries()]
+  return []
+}
+
+function formatMtime(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return 'unknown'
+  return new Date(ms).toISOString().slice(0, 19).replace('T', ' ')
+}

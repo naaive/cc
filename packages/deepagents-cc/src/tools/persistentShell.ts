@@ -50,10 +50,18 @@ export class PersistentShell extends EventEmitter {
   private child: ChildProcessWithoutNullStreams | null = null
   private readonly opts: PersistentShellOptions
   private busy = false
+  /** Last cwd reported by a successful `run()` — used by the cwd-drift reminder. */
+  private _lastCwd: string
 
   constructor(opts: PersistentShellOptions = {}) {
     super()
     this.opts = opts
+    this._lastCwd = opts.cwd ?? process.cwd()
+  }
+
+  /** Current cwd, as last reported by the shell. Updates after every run(). */
+  get lastCwd(): string {
+    return this._lastCwd
   }
 
   start(): void {
@@ -127,6 +135,7 @@ export class PersistentShell extends EventEmitter {
         child.stdout.off('data', onStdout)
         child.stderr.off('data', onStderr)
         this.busy = false
+        this._lastCwd = cwd
         resolve({
           stdout,
           stderr,

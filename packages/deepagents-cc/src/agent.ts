@@ -484,6 +484,8 @@ export function createClaudeCodeAgent(
     ccReminders.todoState(),
     ccReminders.todoStaleNudge(),
     ccReminders.planModeActive(),
+    ccReminders.fileStateContext(fileStateCache),
+    ccReminders.cwdDrift(() => shell.lastCwd, cwd),
   ]
   if (params.autoCompactWarning !== false) {
     const warnAt = params.autoCompactWarning?.warnAt ?? 60_000

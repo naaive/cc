@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   autoPinFirstByRole,
   isMessagePinned,
-} from '../middleware/compactionPure.js'
+} from '../lib/messageUtils.js'
 
 interface FakeMsg {
   content: string

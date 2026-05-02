@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { globToRegex } from '../tools/globRegex.js'
+import { globToRegex } from '../lib/glob.js'
 
 describe('globToRegex', () => {
   test('* matches within a single segment', () => {

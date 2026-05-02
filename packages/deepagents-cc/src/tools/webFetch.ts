@@ -11,7 +11,7 @@
 import { tool } from 'langchain'
 import { z } from 'zod/v4'
 import { TOOL_DESCRIPTIONS, TOOL_NAMES } from './ccToolNames.js'
-import { htmlToText } from './htmlToText.js'
+import { htmlToText } from '../lib/html.js'
 
 export { htmlToText }
 

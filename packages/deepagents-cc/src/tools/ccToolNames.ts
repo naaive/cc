@@ -29,7 +29,6 @@ export const TOOL_NAMES = {
   AskUserQuestion: 'AskUserQuestion',
   ExitPlanMode: 'ExitPlanMode',
   NotebookEdit: 'NotebookEdit',
-  SlashCommand: 'SlashCommand',
 } as const
 
 export type ToolName = (typeof TOOL_NAMES)[keyof typeof TOOL_NAMES]
@@ -48,7 +47,6 @@ export const CC_READ_ONLY_TOOLS: ReadonlySet<ToolName> = new Set([
   'TodoWrite', // metadata-only mutation
   'BashOutput', // reading bg job output is read-only
   'Agent', // sub-agent runs under its own permission mode
-  'SlashCommand', // commands gated by their own handlers
 ])
 
 export const CC_WRITE_TOOLS: ReadonlySet<ToolName> = new Set([
@@ -247,10 +245,6 @@ Limits: ≤ 5 questions per call, each with 2-6 short options.`,
   ExitPlanMode: `Use this tool to exit plan mode and submit your plan to the user for approval.
 
 You should only call this tool once you have written your plan and are ready to execute it. The user must approve the plan before you start making changes.`,
-
-  SlashCommand: `Invoke a slash command from inside the agent.
-
-Use this when you decide a command would help — e.g. /mode plan to flip into read-only investigation, /memory to record a project convention, /compact to free up context. Built-ins: /clear, /help, /init, /compact, /memory, /mode.`,
 
   NotebookEdit: `Modify a Jupyter notebook (.ipynb) cell.
 

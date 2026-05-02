@@ -50,9 +50,9 @@ import {
   isMessagePinned as isPinned,
   roughTokenCount,
   stringifyContent,
-} from './compactionPure.js'
+} from '../lib/messageUtils.js'
 
-export { isMessagePinned, pinMessage, roughTokenCount } from './compactionPure.js'
+export { isMessagePinned, pinMessage, roughTokenCount } from '../lib/messageUtils.js'
 
 export interface SummarizationMiddlewareOptions {
   /** T1: keep tool_results from at least this many recent turns intact. */

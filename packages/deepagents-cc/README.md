@@ -72,7 +72,7 @@ Things we built from scratch — langchain has no equivalent and cc's contract i
 | **Grep**               | Ripgrep when available, pure-Node fallback otherwise. cc's `output_mode` enum (`content`, `files_with_matches`, `count`) and `-i`, `multiline`, `glob`, `head_limit` all supported.                              |
 | **Summarization**      | Token-budget compaction with a pluggable summarizer (offline heuristic by default).                                                                                                                              |
 | **Slash commands**     | `/clear`, `/help`, `/init`, `/compact`, `/memory`, `/mode`.                                                                                                                                                      |
-| **CLI**                | `ccx -p "..."` headless and `ccx` interactive REPL.                                                                                                                                                              |
+| **Hosting**            | Library only — no CLI / REPL / slash commands. Drop `createClaudeCodeAgent` into your own runtime.                                                                                                              |
 
 ## Quickstart
 
@@ -205,17 +205,6 @@ createClaudeCodeAgent({
     "PreToolUse": [{ "command": "./scripts/audit-tool-call.sh" }]
   }
 }
-```
-
-## CLI
-
-```
-$ ccx -p "list every TODO comment in src/"
-$ echo "review this PR" | ccx -p
-$ ccx
-ccx — Claude Code on LangChain. Type /help for commands.
-[default] > /mode plan
-[plan] > sketch the refactor for the auth module
 ```
 
 ## Context engineering — what cc does and we copy

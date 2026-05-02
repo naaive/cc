@@ -13,7 +13,7 @@
 import { tool, HumanMessage } from 'langchain'
 import { z } from 'zod/v4'
 import { TOOL_DESCRIPTIONS, TOOL_NAMES, type ToolName } from './ccToolNames.js'
-import { defaultLargeResultSummary } from './largeResultSummary.js'
+import { defaultLargeResultSummary } from '../lib/largeResultSummary.js'
 
 export { defaultLargeResultSummary }
 

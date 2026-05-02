@@ -19,7 +19,7 @@
  * apply to every call of the named tool.
  */
 
-import { globToRegex } from './tools/globRegex.js'
+import { globToRegex } from './lib/glob.js'
 import type { ToolName } from './tools/ccToolNames.js'
 
 export type PermissionRuleMode = 'allow' | 'deny'

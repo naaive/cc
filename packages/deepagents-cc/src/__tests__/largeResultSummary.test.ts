@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { defaultLargeResultSummary } from '../tools/largeResultSummary.js'
+import { defaultLargeResultSummary } from '../lib/largeResultSummary.js'
 
 describe('defaultLargeResultSummary', () => {
   test('returns input untouched when within head+tail budget', () => {

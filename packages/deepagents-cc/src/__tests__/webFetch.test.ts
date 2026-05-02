@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { htmlToText } from '../tools/htmlToText.js'
+import { htmlToText } from '../lib/html.js'
 
 describe('htmlToText', () => {
   test('drops script and style tags entirely', () => {

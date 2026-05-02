@@ -16,7 +16,7 @@ import { tool } from 'langchain'
 import { z } from 'zod/v4'
 import { TOOL_DESCRIPTIONS, TOOL_NAMES } from './ccToolNames.js'
 import { DEFAULT_SKIP_DIRS, ensureAbsolute } from './fsUtils.js'
-import { globToRegex } from './globRegex.js'
+import { globToRegex } from '../lib/glob.js'
 
 export { globToRegex }
 

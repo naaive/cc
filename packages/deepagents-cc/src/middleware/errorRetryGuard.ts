@@ -20,7 +20,7 @@ import {
   type AgentMiddleware,
 } from 'langchain'
 import { z } from 'zod/v4'
-import { denialFingerprint } from './denialFingerprint.js'
+import { denialFingerprint } from '../lib/fingerprint.js'
 
 export interface ErrorRetryGuardOptions {
   /** Cap on the number of recent error fingerprints we remember. */

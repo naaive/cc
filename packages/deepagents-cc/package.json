@@ -13,9 +13,6 @@
     "./settings": "./src/settings.ts",
     "./prompt": "./src/prompt.ts"
   },
-  "bin": {
-    "ccx": "./src/cli.ts"
-  },
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit"

@@ -14,7 +14,7 @@
  *   - The host wires the consumed names into a Reminder factory.
  */
 
-import { globToRegex } from '../tools/globRegex.js'
+import { globToRegex } from '../lib/glob.js'
 import type { SkillMetadata } from './loader.js'
 
 export interface SkillActivator {

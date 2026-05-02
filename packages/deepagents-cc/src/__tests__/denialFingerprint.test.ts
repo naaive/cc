@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   denialFingerprint,
   stableJson,
-} from '../middleware/denialFingerprint.js'
+} from '../lib/fingerprint.js'
 
 describe('stableJson', () => {
   test('orders object keys deterministically', () => {

@@ -9,7 +9,7 @@
  * survive across turns.
  */
 
-import type { Todo } from '../tools/writeTodos.js'
+import type { Todo } from '../tools/todoWrite.js'
 import type { PermissionMode } from '../permissionMode.js'
 import type { SkillActivator } from '../skills/activation.js'
 import { readSkillBody, type SkillMetadata } from '../skills/loader.js'

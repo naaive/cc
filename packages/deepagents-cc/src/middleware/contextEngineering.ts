@@ -23,7 +23,7 @@ import {
 } from 'langchain'
 import { z } from 'zod/v4'
 import { ccReminders, type Reminder, type ReminderContext } from './reminders.js'
-import type { Todo } from '../tools/writeTodos.js'
+import type { Todo } from '../tools/todoWrite.js'
 import type { PermissionMode } from '../permissionMode.js'
 
 export { ccReminders, type Reminder, type ReminderContext }

@@ -13,7 +13,7 @@ import {
   pinMessage,
   roughTokenCount,
   stringifyContent,
-} from '../middleware/compactionPure.js'
+} from '../lib/messageUtils.js'
 
 describe('pinMessage / isMessagePinned', () => {
   test('round-trips on a plain message-shaped object', () => {

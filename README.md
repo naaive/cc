@@ -1,244 +1,285 @@
-# Claude Code Best V5 (CCB)
+# Forge
 
-[![GitHub Stars](https://img.shields.io/github/stars/claude-code-best/claude-code?style=flat-square&logo=github&color=yellow)](https://github.com/claude-code-best/claude-code/stargazers)
-[![GitHub Contributors](https://img.shields.io/github/contributors/claude-code-best/claude-code?style=flat-square&color=green)](https://github.com/claude-code-best/claude-code/graphs/contributors)
-[![GitHub Issues](https://img.shields.io/github/issues/claude-code-best/claude-code?style=flat-square&color=orange)](https://github.com/claude-code-best/claude-code/issues)
-[![GitHub License](https://img.shields.io/github/license/claude-code-best/claude-code?style=flat-square)](https://github.com/claude-code-best/claude-code/blob/main/LICENSE)
-[![Last Commit](https://img.shields.io/github/last-commit/claude-code-best/claude-code?style=flat-square&color=blue)](https://github.com/claude-code-best/claude-code/commits/main)
-[![Bun](https://img.shields.io/badge/runtime-Bun-black?style=flat-square&logo=bun)](https://bun.sh/)
-[![Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=flat-square&logo=discord)](https://discord.gg/uApuzJWGKX)
+A coding-agent harness built directly on `langchain.createAgent`.
 
-> Which Claude do you like? The open source one is the best.
+Forge gives you a complete, batteries-included coding agent: real-disk filesystem tools, a long-lived persistent shell, ripgrep-backed search, plan / accept-edits / bypass permission modes, hooks, system reminders, settings, slash commands, sub-agents, MCP, multi-tier compaction, and prompt caching — all wired into the LangGraph runtime so streaming, checkpointers, and Studio work out of the box.
 
-牢 A (Anthropic) 官方 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI 工具的源码反编译/逆向还原项目。目标是将 Claude Code 大部分功能及工程化能力复现 (问就是老佛爷已经付过钱了)。虽然很难绷, 但是它叫做 CCB(踩踩背)... 而且, 我们实现了企业版或者需要登陆 Claude 账号才能使用的特性, 实现技术普惠
+## What you get from LangChain
 
-> 我们将会在五一期间进行整个代码仓库的 lint 规范化, 这个期间提交的 PR 可能会有非常多的冲突, 所以大的功能请尽量在这之前提交哈
+| Layer                          | Source                                                                              |
+| ------------------------------ | ----------------------------------------------------------------------------------- |
+| Agent loop                     | `createAgent` from `langchain`                                                      |
+| Middleware framework           | `createMiddleware`, `AgentMiddleware` from `langchain`                              |
+| Tool factory                   | `tool()` + `StructuredTool` / `ClientTool` / `ServerTool` from `@langchain/core`    |
+| Messages                       | `SystemMessage` / `HumanMessage` / `ToolMessage` / `BaseMessage` from `langchain`   |
+| Models                         | `LanguageModelLike` from `@langchain/core/language_models/base`                     |
+| State updates                  | `Command` from `@langchain/langgraph`                                               |
+| Checkpointer / Store           | `BaseCheckpointSaver` / `BaseStore` from `@langchain/langgraph-checkpoint`          |
+| Conversation prompt cache      | `anthropicPromptCachingMiddleware` from `langchain` (system-tail markers added on top) |
+| Human-in-the-loop approval     | `humanInTheLoopMiddleware` from `langchain` (`interruptOn` param)                   |
+| Summarization (opt-in)         | `summarizationMiddleware` from `langchain` (`preferLangchainSummarization: true`)   |
+| MCP                            | `@langchain/mcp-adapters` (peer dep) via `setupMcpServers` thin wrapper             |
 
-[文档在这里, 支持投稿 PR](https://ccb.agent-aura.top/) | [留影文档在这里](./Friends.md) | [Discord 群组](https://discord.gg/uApuzJWGKX)
+## What Forge adds on top
 
+| Component                        | Why custom                                                                                  |
+| -------------------------------- | -------------------------------------------------------------------------------------------- |
+| Real-disk fs tools               | LangChain has no fs tools; Forge edits real files with mtime stale-edit guard               |
+| `PersistentShell` + bg jobs      | `cd` / exports persist across calls; BashOutput / KillShell registry                        |
+| `DeferredToolRegistry` + ToolSearch | On-demand schema loading                                                                  |
+| `ResultStore` + eviction         | `forge-store://` swap-out for oversized tool results                                          |
+| Permission modes + rules         | Plan / acceptEdits / bypass + per-tool / per-arg pattern rules                              |
+| `<system-reminder>` engine       | Per-turn todo state / plan banner / skill activation injection                              |
+| Skills loader                    | Anthropic Agent Skills spec (`SKILL.md` frontmatter)                                          |
+| Prompt cache (system tail)       | Anthropic-API breakpoints on identity / behavior / env tiers                                 |
+| Output styles                    | Built-in presets (`concise` / `explanatory` / `learning`) + custom registry                 |
+| Path recovery                    | "Did you mean ...?" Levenshtein + cwd basename walk                                           |
+| Truncation policy                | Per-tool refine-query / page-next / generic hints                                            |
+| `TodoWrite` tool                 | `TodoWrite` (PascalCase) so the model sees the same name in prompt and registry             |
+| Hooks (5 events)                 | Inline JS + shell-command hooks                                                              |
 
-| 特性                        | 说明                                                                                                                         | 文档                                                                                                                                      |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| **Claude 群控技术**         | Pipe IPC 多实例协作：同机 main/sub 自动编排 + LAN 跨机器零配置发现与通讯，`/pipes` 选择面板 + `Shift+↓` 交互 + 消息广播路由 | [Pipe IPC](https://ccb.agent-aura.top/docs/features/uds-inbox) / [LAN](https://ccb.agent-aura.top/docs/features/lan-pipes)                |
-| **ACP 协议一等一支持**      | 支持接入 Zed、Cursor 等 IDE，支持会话恢复、Skills、权限桥接                                                                  | [文档](https://ccb.agent-aura.top/docs/features/acp-zed)                                                                                  |
-| **Remote Control 私有部署** | Docker 自托管远程界面, 可以手机上看 CC                                                                                       | [文档](https://ccb.agent-aura.top/docs/features/remote-control-self-hosting)                                                              |
-| **Langfuse 监控**           | 企业级 Agent 监控, 可以清晰看到每次 agent loop 细节, 可以一键转化为数据集                                                    | [文档](https://ccb.agent-aura.top/docs/features/langfuse-monitoring)                                                                      |
-| **Web Search**              | 内置网页搜索工具, 支持 bing 和 brave 搜索                                                                                    | [文档](https://ccb.agent-aura.top/docs/features/web-browser-tool)                                                                         |
-| **Poor Mode**               | 穷鬼模式，关闭记忆提取和键入建议,大幅度减少并发请求                                                                          | /poor 可以开关                                                                                                                            |
-| **Channels 频道通知**       | MCP 服务器推送外部消息到会话（飞书/Slack/Discord/微信等），`--channels plugin:name@marketplace` 启用                         | [文档](https://ccb.agent-aura.top/docs/features/channels)                                                                                 |
-| **自定义模型供应商**        | OpenAI/Anthropic/Gemini/Grok 兼容  (`/login`)                                                                                          | [文档](https://ccb.agent-aura.top/docs/features/all-features-guide)                                                                        |
-| Voice Mode                  | 语音输入，支持豆包语言输入（`/voice doubao`）                                                                   | [文档](https://ccb.agent-aura.top/docs/features/voice-mode)                                                                               |
-| Computer Use                | 屏幕截图、键鼠控制                                                                                                           | [文档](https://ccb.agent-aura.top/docs/features/computer-use)                                                                             |
-| Chrome Use                  | 浏览器自动化、表单填写、数据抓取                                                                                             | [自托管](https://ccb.agent-aura.top/docs/features/chrome-use-mcp) [原生版](https://ccb.agent-aura.top/docs/features/claude-in-chrome-mcp) |
-| Sentry                      | 企业级错误追踪                                                                                                               | [文档](https://ccb.agent-aura.top/docs/internals/sentry-setup)                                                                            |
-| GrowthBook                  | 企业级特性开关                                                                                                               | [文档](https://ccb.agent-aura.top/docs/internals/growthbook-adapter)                                                                      |
-| /dream 记忆整理             | 自动整理和优化记忆文件                                                                                                       | [文档](https://ccb.agent-aura.top/docs/features/auto-dream)                                                                               |
+## Quickstart
 
-- 🚀 [想要启动项目](#-快速开始源码版)
-- 🐛 [想要调试项目](#vs-code-调试)
-- 📖 [想要学习项目](#teach-me-学习项目)
+```ts
+import { createForgeAgent } from "@naaive/forge";
 
-## ⚡ 快速开始(安装版)
+const { agent, shell, jobRegistry } = createForgeAgent({
+  model: "claude-sonnet-4-6",
+});
 
-不用克隆仓库, 从 NPM 下载后, 直接使用
-
-```sh
-npm i -g claude-code-best
-
-# bun 安装比较多问题, 推荐 npm 装
-# bun  i -g claude-code-best
-# bun pm -g trust claude-code-best @claude-code-best/mcp-chrome-bridge
-
-ccb # 以 nodejs 打开 claude code
-ccb-bun # 以 bun 形态打开
-ccb update # 更新到最新版本
-CLAUDE_BRIDGE_BASE_URL=https://remote-control.claude-code-best.win/ CLAUDE_BRIDGE_OAUTH_TOKEN=test-my-key ccb --remote-control # 我们有自部署的远程控制
+try {
+  const result = await agent.invoke({
+    messages: [{ role: "user", content: "Refactor src/foo.ts to use async/await" }],
+  });
+  console.log(result.messages.at(-1)?.content);
+} finally {
+  shell.stop();
+  jobRegistry.stopAll();
+}
 ```
 
-> **安装/更新失败？** 先 `npm rm -g claude-code-best` 清理旧版本，再 `npm i -g claude-code-best@latest`。仍失败则指定版本号：`npm i -g claude-code-best@<版本号>`
+The returned `agent` is a normal compiled LangGraph — streaming, checkpointers, and Studio all work as usual.
 
-## ⚡ 快速开始(源码版)
+## Tool surface
 
-### ⚙️ 环境要求
+```
+Bash                Long-lived shell. cd / exports / shell options persist across calls.
+                    run_in_background=true → spawn a detached job, return shell_id.
+BashOutput          Read NEW output from a background job (cursor advances per poll).
+KillShell           SIGTERM (then SIGKILL after 2s) a background job.
 
-一定要最新版本的 bun 啊, 不然一堆奇奇怪怪的 BUG!!! bun upgrade!!!
+Read                file_path (absolute), optional offset/limit. Returns cat -n format.
+Write               Atomic write. Existing files require a prior Read (stale-write guard).
+Edit                Deterministic single-occurrence string replacement. replace_all opt-in.
+NotebookEdit        Replace / insert / delete a Jupyter cell by id.
 
-- 📦 [Bun](https://bun.sh/) >= 1.3.11
+Glob                Pattern → paths, sorted by mtime newest-first.
+Grep                Ripgrep-backed regex search; output_mode = files_with_matches | content | count.
+WebFetch            HTTP(s) GET → markdown. Allow-host filter via settings.
+WebSearch           BYO backend (pass `webSearch: async (q) => [...]`).
 
-**安装 Bun：**
+TodoWrite           Set the full todo list. Re-injected on every turn via system-reminder.
+Agent               Dispatch a sub-agent with isolated context.
+AskUserQuestion     ≤5 multi-choice questions; default backend reads stdin.
+ExitPlanMode        Submit the agreed plan, return to default mode.
+
+PowerShell          Persistent PowerShell on Windows hosts.
+Monitor             Long-running bg process with completion notification.
+CronCreate / CronList / CronDelete   In-process scheduler (pluggable store).
+Config              Read/write a host-supplied whitelist of settings.json keys.
+SlashCommand / DiscoverSlashCommands  Custom command templates.
+```
+
+## Permission modes
+
+| Mode                | Behaviour                                                                       |
+| ------------------- | ------------------------------------------------------------------------------- |
+| `default`           | Every tool runs.                                                                |
+| `acceptEdits`       | Same as default for blocking; modes diverge in how the host UI prompts.         |
+| `plan`              | Read-only. Every write tool returns "denied" until `ExitPlanMode`.              |
+| `bypassPermissions` | Skip every check.                                                               |
+
+## Prompt cache
+
+Forge places **4** `cache_control: ephemeral` markers per request, lining up with the four-position cap that Anthropic's prompt cache supports:
+
+```
+                                                       ←── cache hit boundary
+[ identity + intro (very stable) ]                     ① cached
+[ # System / # Doing tasks / # Tone / # Tool use … ]   ② cached
+[ # Environment + project memory ]                     ③ cached
+... older turns ...                                    ④ cached (anchor before rolling tail)
+[ last user msg + last assistant msg ]                 ↑ rolling tail (not yet cached)
+```
+
+The first three markers are placed by `createPromptCacheMiddleware`; the fourth (and the conversation-side anchors) are placed by langchain's built-in `anthropicPromptCachingMiddleware`, which is wired in automatically when the model is Claude.
+
+`extendedTtl: true` switches to the 1-hour beta TTL on supported models.
+
+## Context engineering — system reminders
+
+Forge injects `<system-reminder>` blocks into the user's turn so the model sees just-in-time facts that don't deserve their own message:
+
+- **`todo-state`**: re-injects the FULL todo list every turn. The model is expected to treat each turn's reminder as canonical.
+- **`todo-stale-nudge`**: when no todo list exists and the conversation has gone N turns, suggest using `TodoWrite`.
+- **`plan-mode-active`**: persistent banner reminding the model it's read-only until `ExitPlanMode`.
+- **`file-state`**: every turn the FileStateCache changed, list "files you've already Read this session" (with mtimes, capped) so the model doesn't blindly re-Read.
+- **`cwd-drift`**: when the persistent shell's live cwd diverges from the cwd baked into the env block (because the model ran `cd` somewhere), fire a one-time reminder with the new cwd + how to return.
+- **`compaction-applied`**: after any compaction tier fires, list what was preserved and how many tokens were saved.
+- **`auto-compact-warning`**: pre-warning when conversation crosses ~75% of the summarization trigger.
+- **`skill-activated`**: when a skill's `activate-paths` matches a Read, inject its body once.
+- **custom**: `reminders.custom("ci-mode", "You are running in CI; do NOT push to main.")` — fires every N turns.
+
+Plus, the `Edit` tool's "old_string is not unique" error lists every match with line + col + one-line context (capped at 5, with a "more" marker when applicable) so the model can pick the disambiguation it needs without another Read round-trip.
+
+```ts
+import { createForgeAgent, reminders } from "@naaive/forge";
+
+createForgeAgent({
+  reminders: [
+    reminders.custom("style-rule", "Match the existing 2-space indent in this repo.", 5),
+  ],
+});
+```
+
+## Hooks
+
+```ts
+createForgeAgent({
+  hooks: {
+    PreToolUse: [
+      payload => {
+        if (
+          payload.toolName === "Bash" &&
+          /API_KEY=/.test(JSON.stringify(payload.toolInput))
+        ) {
+          return { block: true, message: "Refusing: looks like an API key was inlined." };
+        }
+      },
+      { command: "node /opt/audit/preToolUse.js" },
+    ],
+  },
+});
+```
+
+## Settings
+
+```json
+{
+  "model": "claude-sonnet-4-6",
+  "permissionMode": "default",
+  "allowedTools": ["Read", "Grep", "Bash"],
+  "bashDeny": ["rm -rf /", "git push --force"],
+  "webFetchAllowHosts": ["docs.langchain.com"],
+  "hooks": {
+    "PreToolUse": [{ "command": "./scripts/audit-tool-call.sh" }]
+  }
+}
+```
+
+Settings are merged from `~/.forge/settings.json` → `<repo>/.forge/settings.json` → `<repo>/.forge/settings.local.json` (later overrides earlier).
+
+## MCP
+
+We use `@langchain/mcp-adapters` (LangChain's official MCP client) — no need to reinvent the protocol layer. The package exposes a thin wrapper:
+
+```ts
+import { createForgeAgent, setupMcpServers } from "@naaive/forge";
+
+const mcp = await setupMcpServers({
+  slack: { command: "npx", args: ["-y", "@modelcontextprotocol/server-slack"] },
+  github: { command: "npx", args: ["-y", "@modelcontextprotocol/server-github"] },
+});
+
+const { agent } = createForgeAgent({
+  // MCP tools land in the deferred registry — system prompt only lists names,
+  // schemas are loaded via ToolSearch when the model needs them.
+  deferredTools: mcp.tools,
+  mcpClient: mcp.client,
+});
+
+try { await agent.invoke({ messages }) } finally { await mcp.stop() }
+```
+
+`@langchain/mcp-adapters` is an **optional peer dependency** — only install it when you actually use MCP.
+
+## Multi-tier compaction
+
+LangChain's official `summarizationMiddleware` is a one-trick blunt instrument — it just LLM-summarizes when context fills up. Forge runs a graduated, lossless-first cascade:
+
+```
+T0 time-gap microcompact   on long idle   · lossless     · cache cold anyway → keep last 1 round, stub the rest
+T1 microcompact            every turn     · lossless     · old ToolMessage bodies → "[evicted; ...]" stub (Read can refetch)
+T2 dedup tool_results      every turn     · lossless     · identical tool_results → "[same as tool_use_<id>]"
+T3 aged-media strip        every turn     · recoverable  · image/PDF blocks past N rounds → text stub
+T3.5 excess-media strip    every turn     · recoverable  · drop oldest media when total > 100 (Anthropic API hard cap)
+T4 summarization           on threshold   · LOSSY        · fold oldest chunk into a SystemMessage; tool_use/tool_result pairs preserved
+T5 pinning                 any tier       · —            · pinMessage(msg) protects from every tier
++ pairing-repair (always)  before model   · structural   · synthesize placeholders for orphan tool_use, drop orphan tool_result, dedup ids
+```
+
+Round boundaries follow the AIMessage `id` change, so streaming chunks share a round and single-prompt agentic sessions still group correctly. `recentRoundCutoff(n)` instead of "last N user turns" — fixes the use case where one human prompt produces many API rounds.
+
+After any tier fires, a `<system-reminder name="compaction-applied">` block is appended to the next user message so the model knows what was preserved.
+
+```ts
+import { createForgeAgent, pinMessage } from "@naaive/forge";
+import { HumanMessage } from "langchain";
+
+// Pin the spec doc so it survives every compaction.
+const spec = pinMessage(new HumanMessage("# API Spec\n\n..."));
+
+const { agent } = createForgeAgent({
+  summarization: {
+    microcompactKeepRecent: 8,
+    dedupeToolResults: true,
+    agedMediaStripTurns: 6,
+    triggerTokens: 80_000,
+    keepTail: 16,
+    chunkFraction: 0.4,
+    summarize: async msgs => {
+      const reply = await myLLM.invoke([
+        new SystemMessage("Summarize succinctly..."),
+        ...msgs,
+      ]);
+      return typeof reply.content === "string" ? reply.content : "";
+    },
+    onCompact: ev => console.log(`${ev.tier}: -${ev.beforeTokens - ev.afterTokens} tokens`),
+  },
+});
+
+await agent.invoke({ messages: [spec, new HumanMessage("Implement endpoint /users")] });
+```
+
+Boundary safety: T4 never cuts between an `AIMessage` with `tool_calls` and the matching `ToolMessage`s — the boundary is slid forward to the next safe spot.
+
+## Tests
 
 ```bash
-# Linux 和 macOS
-curl -fsSL https://bun.sh/install | bash
-
-# Windows (PowerShell)
-powershell -c "irm bun.sh/install.ps1 | iex"
+bun test
 ```
 
-**安装后的操作：**
+The pure modules (tool registry, prompt assembly, fs helpers, glob regex, html→text, persistent-shell contract, reminder factories, settings merge, project-memory loader, permission classification, NotebookEdit semantics) are unit-tested.
 
-1. **让当前终端识别 `bun` 命令**
+## Project layout
 
-   安装脚本会把 `~/.bun/bin` 写入对应的 shell 配置文件。macOS 默认 zsh 环境通常会看到：
-
-   ```text
-   Added "~/.bun/bin" to $PATH in "~/.zshrc"
-   ```
-
-   可以按安装脚本提示重启当前 shell：
-
-   ```bash
-   exec /bin/zsh
-   ```
-
-   如果你使用 bash，重新加载 bash 配置：
-
-   ```bash
-   source ~/.bashrc
-   ```
-
-   Windows PowerShell 用户关闭并重新打开 PowerShell 即可。
-
-2. **验证 Bun 是否可用**
-
-   ```bash
-   bun --help
-   bun --version
-   ```
-
-3. **如果已经安装过 Bun，更新到最新版本**
-
-   ```bash
-   bun upgrade
-   ```
-
-- ⚙️ 常规的配置 CC 的方式, 各大提供商都有自己的配置方式
-
-### 📍 命令执行位置
-
-- 安装或检查 Bun 的命令可以在任意目录执行：
-  `curl -fsSL https://bun.sh/install | bash`、`bun --help`、`bun --version`、`bun upgrade`
-- 安装本项目依赖、启动开发模式、构建项目时，必须先进入本仓库根目录，也就是包含 `package.json` 的目录。
-
-### 📥 安装
-
-```bash
-cd /path/to/claude-code
-bun install
 ```
+src/
+  agent.ts              entrypoint — createForgeAgent
+  prompt.ts             system prompt assembly + cache-block split
+  memory.ts             AGENTS.md project-memory loader
+  env.ts                cwd / git / platform snapshot
+  settings.ts           ~/.forge + .forge/ settings merge
+  permissionMode.ts     plan / acceptEdits / bypass classifier
+  permissionRules.ts    per-tool / per-arg pattern rules
+  outputStyles.ts       concise / explanatory / learning + custom
+  errors.ts             ConfigurationError, HookFailureError
 
-### ▶️ 运行
-
-```bash
-# 开发模式, 看到版本号 888 说明就是对了
-bun run dev
-
-# 构建
-bun run build
+  agent/                tool list + middleware chain assembly
+  tools/                Bash, Read, Write, Edit, Grep, ... + shared registries
+  middleware/           context-engineering, hooks, permissions, summarization, ...
+  skills/               Agent Skills (SKILL.md) loader + activation
+  commands/             custom slash commands (.forge/commands/)
+  mcp/                  thin wrapper over @langchain/mcp-adapters
+  lib/                  pure helpers (glob, html→text, message utils, ...)
 ```
-
-构建采用 code splitting 多文件打包（`build.ts`），产物输出到 `dist/` 目录（入口 `dist/cli.js` + 约 450 个 chunk 文件）。
-
-构建出的版本 bun 和 node 都可以启动, 你 publish 到私有源可以直接启动
-
-如果遇到 bug 请直接提一个 issues, 我们优先解决
-
-### 👤 新人配置 /login
-
-首次运行后，在 REPL 中输入 `/login` 命令进入登录配置界面，选择 **Anthropic Compatible** 即可对接第三方 API 兼容服务（无需 Anthropic 官方账号）。
-选择 OpenAI 和 Gemini 对应的栏目都是支持相应协议的
-
-需要填写的字段：
-
-
-| 📌 字段      | 📝 说明       | 💡 示例                      |
-| ------------ | ------------- | ---------------------------- |
-| Base URL     | API 服务地址  | `https://api.example.com/v1` |
-| API Key      | 认证密钥      | `sk-xxx`                     |
-| Haiku Model  | 快速模型 ID   | `claude-haiku-4-5-20251001`  |
-| Sonnet Model | 均衡模型 ID   | `claude-sonnet-4-6`          |
-| Opus Model   | 高性能模型 ID | `claude-opus-4-6`            |
-
-- ⌨️ **Tab / Shift+Tab** 切换字段，**Enter** 确认并跳到下一个，最后一个字段按 Enter 保存
-
-> ℹ️ 支持所有 Anthropic API 兼容服务（如 OpenRouter、AWS Bedrock 代理等），只要接口兼容 Messages API 即可。
-
-## Feature Flags
-
-所有功能开关通过 `FEATURE_<FLAG_NAME>=1` 环境变量启用，例如：
-
-```bash
-FEATURE_BUDDY=1 FEATURE_FORK_SUBAGENT=1 bun run dev
-```
-
-各 Feature 的详细说明见 [`docs/features/`](docs/features/) 目录，欢迎投稿补充。
-
-## VS Code 调试
-
-TUI (REPL) 模式需要真实终端，无法直接通过 VS Code launch 启动调试。使用 **attach 模式**：
-
-### 步骤
-
-1. **终端启动 inspect 服务**：
-
-   ```bash
-   bun run dev:inspect
-   ```
-
-   会输出类似 `ws://localhost:8888/xxxxxxxx` 的地址。
-2. **VS Code 附着调试器**：
-
-   - 在 `src/` 文件中打断点
-   - F5 → 选择 **"Attach to Bun (TUI debug)"**
-
-## Teach Me 学习项目
-
-我们新加了一个 teach-me skills, 通过问答式引导帮你理解这个项目的任何模块。(调整 [sigma skill 而来](https://github.com/sanyuan0704/sanyuan-skills))
-
-```bash
-# 在 REPL 中直接输入
-/teach-me Claude Code 架构
-/teach-me React Ink 终端渲染 --level beginner
-/teach-me Tool 系统 --resume
-```
-
-### 它能做什么
-
-- **诊断水平** — 自动评估你对相关概念的掌握程度，跳过已知的、聚焦薄弱的
-- **构建学习路径** — 将主题拆解为 5-15 个原子概念，按依赖排序逐步推进
-- **苏格拉底式提问** — 用选项引导思考，而非直接给答案
-- **错误概念追踪** — 发现并纠正深层误解
-- **断点续学** — `--resume` 从上次进度继续
-
-### 学习记录
-
-学习进度保存在 `.claude/skills/teach-me/` 目录下，支持跨主题学习者档案。
-
-## 相关文档及网站
-
-- **在线文档（Mintlify）**: [ccb.agent-aura.top](https://ccb.agent-aura.top/) — 文档源码位于 [`docs/`](docs/) 目录，欢迎投稿 PR
-- **DeepWiki**: [https://deepwiki.com/claude-code-best/claude-code](https://deepwiki.com/claude-code-best/claude-code)
-
-## Contributors
-
-<a href="https://github.com/claude-code-best/claude-code/graphs/contributors">
-  <img src="contributors.svg" alt="Contributors" />
-</a>
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=claude-code-best%2Fclaude-code&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/image?repos=claude-code-best/claude-code&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/image?repos=claude-code-best/claude-code&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/image?repos=claude-code-best/claude-code&type=date&legend=top-left" />
- </picture>
-</a>
-
-## 致谢
-
-- [doubaoime-asr](https://github.com/starccy/doubaoime-asr) — 豆包 ASR 语音识别 SDK，为 Voice Mode 提供无需 Anthropic OAuth 的语音输入方案
-
-## 许可证
-
-本项目仅供学习研究用途。Claude Code 的所有权利归 [Anthropic](https://www.anthropic.com/) 所有。

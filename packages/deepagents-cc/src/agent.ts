@@ -21,7 +21,6 @@ import {
   createAgent,
   createMiddleware,
   humanInTheLoopMiddleware,
-  summarizationMiddleware as langchainSummarizationMiddleware,
   type AgentMiddleware,
 } from 'langchain'
 import type {
@@ -180,14 +179,6 @@ export interface CreateClaudeCodeAgentParams {
    */
   checkpointer?: BaseCheckpointSaver
   store?: BaseStore
-  /**
-   * When true, prefer langchain's built-in `summarizationMiddleware`
-   * instead of our heuristic one. Requires that the model can be used
-   * for summary calls (i.e. you're on a real provider, not the offline
-   * test harness). The langchain implementation is more thoroughly
-   * battle-tested for prompt-cache integration and tool-call boundaries.
-   */
-  preferLangchainSummarization?: boolean
 }
 
 export interface ClaudeCodeAgentBundle {
@@ -493,11 +484,7 @@ export function createClaudeCodeAgent(
   middleware.push(createContextEngineeringMiddleware({ reminders }))
 
   if (params.summarization !== false) {
-    middleware.push(
-      params.preferLangchainSummarization
-        ? langchainSummarizationMiddleware({})
-        : createSummarizationMiddleware(params.summarization ?? {}),
-    )
+    middleware.push(createSummarizationMiddleware(params.summarization ?? {}))
   }
 
   if (params.promptCache !== false) {

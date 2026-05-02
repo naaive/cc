@@ -260,11 +260,57 @@ try { await agent.invoke({ messages }) } finally { await mcp.stop() }
 
 `@langchain/mcp-adapters` is an **optional peer dependency** — only install it when you actually use MCP.
 
+## Multi-tier compaction
+
+The official langchain `summarizationMiddleware` is a one-trick blunt instrument — it just LLM-summarizes when context fills up. cc actually runs a graduated, lossless-first cascade. We replicate the policy:
+
+```
+T1 microcompact         every turn   · lossless     · old ToolMessage bodies → "[evicted; ...]" stub (Read can refetch)
+T2 dedup tool_results   every turn   · lossless     · identical tool_results → "[same as tool_use_<id>]"
+T3 aged-media strip     every turn   · recoverable  · image/PDF blocks past N turns → text stub
+T4 summarization        on threshold · LOSSY        · fold oldest chunk into a SystemMessage; tool_use/tool_result pairs preserved
+T5 pinning              any tier     · —            · pinMessage(msg) protects from every tier
+```
+
+After any tier fires, a `<system-reminder name="compaction-applied">` block is appended to the next user message so the model knows what was preserved.
+
+```ts
+import { createClaudeCodeAgent, pinMessage } from "@claude-code-best/cc-on-langchain";
+import { HumanMessage } from "langchain";
+
+// Pin the spec doc so it survives every compaction.
+const spec = pinMessage(new HumanMessage("# API Spec\n\n..."));
+
+const { agent } = createClaudeCodeAgent({
+  summarization: {
+    microcompactKeepRecent: 8,
+    dedupeToolResults: true,
+    agedMediaStripTurns: 6,
+    triggerTokens: 80_000,
+    keepTail: 16,
+    chunkFraction: 0.4,
+    summarize: async msgs => {
+      // Plug in any LLM; default is an offline heuristic (no API key needed).
+      const reply = await myLLM.invoke([
+        new SystemMessage("Summarize succinctly..."),
+        ...msgs,
+      ]);
+      return typeof reply.content === "string" ? reply.content : "";
+    },
+    onCompact: ev => console.log(`${ev.tier}: -${ev.beforeTokens - ev.afterTokens} tokens`),
+  },
+});
+
+await agent.invoke({ messages: [spec, new HumanMessage("Implement endpoint /users")] });
+```
+
+Boundary safety: T4 never cuts between an `AIMessage` with `tool_calls` and the matching `ToolMessage`s — the boundary is slid forward to the next safe spot.
+
 ## Tests
 
 ```bash
 $ bun test
- 195 pass
+ 207 pass
  0 fail
 ```
 

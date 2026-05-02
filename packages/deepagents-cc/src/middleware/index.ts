@@ -29,7 +29,10 @@ export {
 } from './hooks.js'
 export {
   createSummarizationMiddleware,
+  isMessagePinned,
+  pinMessage,
   roughTokenCount,
+  type CompactionEvent,
   type SummarizationMiddlewareOptions,
 } from './summarization.js'
 export {

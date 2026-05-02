@@ -20,6 +20,8 @@ import {
   anthropicPromptCachingMiddleware,
   createAgent,
   createMiddleware,
+  humanInTheLoopMiddleware,
+  summarizationMiddleware as langchainSummarizationMiddleware,
   type AgentMiddleware,
 } from 'langchain'
 import type {
@@ -28,6 +30,10 @@ import type {
   StructuredTool,
 } from '@langchain/core/tools'
 import type { LanguageModelLike } from '@langchain/core/language_models/base'
+import type {
+  BaseCheckpointSaver,
+  BaseStore,
+} from '@langchain/langgraph-checkpoint'
 
 import { collectEnvironment, type EnvironmentInfo } from './env.js'
 import { loadClaudeMd } from './claudemd.js'
@@ -162,6 +168,26 @@ export interface CreateClaudeCodeAgentParams {
    * their schemas on demand via `ToolSearch`.
    */
   mcpClient?: MultiServerMCPClient
+  /**
+   * Tool calls that should pause for human approval before running.
+   * Wired through to langchain's `humanInTheLoopMiddleware`.
+   */
+  interruptOn?: Parameters<typeof humanInTheLoopMiddleware>[0]['interruptOn']
+  /**
+   * Persistence: passes straight through to `createAgent`. With a
+   * checkpointer the agent can resume mid-conversation; with a store
+   * it can read/write long-lived memory.
+   */
+  checkpointer?: BaseCheckpointSaver
+  store?: BaseStore
+  /**
+   * When true, prefer langchain's built-in `summarizationMiddleware`
+   * instead of our heuristic one. Requires that the model can be used
+   * for summary calls (i.e. you're on a real provider, not the offline
+   * test harness). The langchain implementation is more thoroughly
+   * battle-tested for prompt-cache integration and tool-call boundaries.
+   */
+  preferLangchainSummarization?: boolean
 }
 
 export interface ClaudeCodeAgentBundle {
@@ -467,7 +493,11 @@ export function createClaudeCodeAgent(
   middleware.push(createContextEngineeringMiddleware({ reminders }))
 
   if (params.summarization !== false) {
-    middleware.push(createSummarizationMiddleware(params.summarization ?? {}))
+    middleware.push(
+      params.preferLangchainSummarization
+        ? langchainSummarizationMiddleware({})
+        : createSummarizationMiddleware(params.summarization ?? {}),
+    )
   }
 
   if (params.promptCache !== false) {
@@ -486,11 +516,20 @@ export function createClaudeCodeAgent(
     )
   }
 
+  // Human-in-the-loop tool approval — pure langchain primitive, exposed
+  // verbatim. Hosts that wire their own approval UI just supply the
+  // matching `interruptOn` config.
+  if (params.interruptOn) {
+    middleware.push(humanInTheLoopMiddleware({ interruptOn: params.interruptOn }))
+  }
+
   const agent = createAgent({
     model: params.model ?? modelId,
     systemPrompt,
     tools: [...ccTools, ...userTools] as StructuredTool[],
     middleware,
+    checkpointer: params.checkpointer,
+    store: params.store,
   })
 
   return {

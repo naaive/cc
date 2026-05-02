@@ -4,6 +4,40 @@
 
 Tool names, system prompt structure, prompt-cache strategy, system-reminder injection, permission modes, and tool semantics are all aligned with `claude-code` v1.11.x. No `deepagents` wrapper — its in-state filesystem and one-shot bash were too far from cc's contract to layer on top of.
 
+## What we reuse from langchain (vs. what we built ourselves)
+
+| Layer                          | Source                                                                              |
+| ------------------------------ | ----------------------------------------------------------------------------------- |
+| Agent loop                     | `createAgent` from `langchain`                                                      |
+| Middleware framework           | `createMiddleware`, `AgentMiddleware` from `langchain`                              |
+| Tool factory                   | `tool()` + `StructuredTool` / `ClientTool` / `ServerTool` from `@langchain/core`    |
+| Messages                       | `SystemMessage` / `HumanMessage` / `ToolMessage` / `BaseMessage` from `langchain`   |
+| Models                         | `LanguageModelLike` from `@langchain/core/language_models/base`                     |
+| State updates                  | `Command` from `@langchain/langgraph`                                               |
+| Checkpointer / Store           | `BaseCheckpointSaver` / `BaseStore` from `@langchain/langgraph-checkpoint` (passthrough) |
+| Conversation prompt cache      | `anthropicPromptCachingMiddleware` from `langchain` (we add system-tail markers on top) |
+| Human-in-the-loop approval     | `humanInTheLoopMiddleware` from `langchain` (`interruptOn` param)                   |
+| Summarization (opt-in)         | `summarizationMiddleware` from `langchain` (`preferLangchainSummarization: true`)   |
+| MCP                            | `@langchain/mcp-adapters` (peer dep) via `setupMcpServers` thin wrapper             |
+
+Things we built from scratch — langchain has no equivalent and cc's contract is non-negotiable:
+
+| Component                  | Why custom                                                                                  |
+| -------------------------- | -------------------------------------------------------------------------------------------- |
+| Real-disk fs tools         | langchain has no fs tools; cc edits real files with mtime stale-edit guard                   |
+| `PersistentShell` + bg jobs | `cd`/exports persist across calls; BashOutput/KillShell registry                             |
+| `DeferredToolRegistry` + ToolSearch | cc-style on-demand schema loading                                                  |
+| `ResultStore` + eviction   | `ccx-store://` swap-out for oversized tool results                                           |
+| Permission modes + rules   | cc's plan/acceptEdits/bypass + per-tool / per-arg pattern rules                              |
+| `<system-reminder>` engine | Per-turn todo state / plan banner / skill activation injection                               |
+| Skills loader              | Anthropic Agent Skills spec (SKILL.md frontmatter)                                            |
+| Prompt cache (system tail) | Anthropic-API breakpoints on identity / behavior / env tiers                                 |
+| Output styles              | cc presets (concise / explanatory / learning) + custom registry                              |
+| Path recovery              | "Did you mean ...?" Levenshtein + cwd basename walk                                           |
+| Truncation policy          | Per-tool refine-query / page-next / generic hints                                            |
+| TodoWrite tool             | langchain's `todoListMiddleware` uses `write_todos`; we need PascalCase `TodoWrite`           |
+| Hooks (5 events)           | Inline JS + shell-command hooks (cc's settings.json hook format)                              |
+
 ## What's aligned with cc
 
 | Layer                  | Detail                                                                                                                                                                                                          |

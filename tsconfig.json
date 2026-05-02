@@ -25,5 +25,5 @@
         }
     },
     "include": ["src/**/*.ts", "src/**/*.tsx", "packages/**/*.ts", "packages/**/*.tsx"],
-    "exclude": ["node_modules"]
+    "exclude": ["node_modules", "packages/deepagents-cc"]
 }

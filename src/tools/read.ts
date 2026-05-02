@@ -19,7 +19,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { tool } from 'langchain'
-import { z } from 'zod/v4'
+import { z } from 'zod'
 import { TOOL_DESCRIPTIONS, TOOL_NAMES } from './toolNames.js'
 import {
   addLineNumbers,

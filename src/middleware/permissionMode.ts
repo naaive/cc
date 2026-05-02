@@ -16,7 +16,7 @@ import {
   type AgentMiddleware,
   ToolMessage,
 } from 'langchain'
-import { z } from 'zod/v4'
+import { z } from 'zod'
 import {
   decide,
   PERMISSION_MODES,

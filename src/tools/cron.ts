@@ -23,7 +23,7 @@
 import { randomUUID } from 'node:crypto'
 import { tool } from 'langchain'
 import type { StructuredTool } from '@langchain/core/tools'
-import { z } from 'zod/v4'
+import { z } from 'zod'
 import {
   computeNextFire,
   createInMemoryCronStore,

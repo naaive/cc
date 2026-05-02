@@ -15,7 +15,7 @@
 
 import { tool } from 'langchain'
 import type { StructuredTool } from '@langchain/core/tools'
-import { z } from 'zod/v4'
+import { z } from 'zod'
 import { TOOL_DESCRIPTIONS, TOOL_NAMES } from './toolNames.js'
 import {
   BackgroundJobRegistry,

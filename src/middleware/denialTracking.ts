@@ -16,7 +16,7 @@ import {
   ToolMessage,
   type AgentMiddleware,
 } from 'langchain'
-import { z } from 'zod/v4'
+import { z } from 'zod'
 import { denialFingerprint as fingerprint, stableJson } from '../lib/fingerprint.js'
 
 export { fingerprint as denialFingerprint, stableJson }

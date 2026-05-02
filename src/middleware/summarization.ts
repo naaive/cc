@@ -44,7 +44,7 @@ import {
   type AgentMiddleware,
   type BaseMessage,
 } from 'langchain'
-import { z } from 'zod/v4'
+import { z } from 'zod'
 import {
   djb2,
   isMessagePinned as isPinned,

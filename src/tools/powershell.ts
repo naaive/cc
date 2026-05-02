@@ -22,7 +22,7 @@ import {
 import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { tool } from 'langchain'
-import { z } from 'zod/v4'
+import { z } from 'zod'
 
 const DEFAULT_TIMEOUT_MS = 120_000
 const MAX_TIMEOUT_MS = 600_000

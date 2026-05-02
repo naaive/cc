@@ -20,7 +20,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { tool } from 'langchain'
-import { z } from 'zod/v4'
+import { z } from 'zod'
 
 export interface MonitoredJob {
   id: string

@@ -11,7 +11,7 @@
  */
 
 import { tool, HumanMessage } from 'langchain'
-import { z } from 'zod/v4'
+import { z } from 'zod'
 import { TOOL_DESCRIPTIONS, TOOL_NAMES, type ToolName } from './toolNames.js'
 import { defaultLargeResultSummary } from '../lib/largeResultSummary.js'
 

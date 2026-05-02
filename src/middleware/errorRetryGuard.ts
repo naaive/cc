@@ -1,17 +1,17 @@
 /**
  * Error-retry guard.
  *
- * we observe that models often retry the *same* tool call after seeing the
- * same error message ("ENOENT: file.ts" → "let me try again with the same
- * path") rather than diagnosing why. This middleware fingerprints
- * (toolName, args, error-text) and short-circuits the second identical
- * retry within the same session: instead of running the tool again, we
- * synthesize a tool result that says "you just tried this and got the
- * same error — diagnose, don't retry blindly".
+ * Models often retry the *same* tool call after seeing the same error message
+ * ("ENOENT: file.ts" → "let me try again with the same path") rather than
+ * diagnosing why. This middleware fingerprints (toolName, args, error-text)
+ * and short-circuits the second identical retry within the same session:
+ * instead of running the tool again, we synthesize a tool result that says
+ * "you just tried this and got the same error — diagnose, don't retry
+ * blindly".
  *
- * Plus: a halt-on-N-consecutive-errors hook. After N back-to-back errors
- * (regardless of tool), inject a system-reminder telling the model to
- * stop and ask the user. we share the same circuit breaker.
+ * Plus: a halt-on-N-consecutive-errors circuit breaker. After N back-to-back
+ * errors (regardless of tool), inject a system-reminder telling the model to
+ * stop and ask the user.
  */
 
 import {
@@ -19,7 +19,7 @@ import {
   ToolMessage,
   type AgentMiddleware,
 } from 'langchain'
-import { z } from 'zod/v4'
+import { z } from 'zod'
 import { denialFingerprint } from '../lib/fingerprint.js'
 
 export interface ErrorRetryGuardOptions {

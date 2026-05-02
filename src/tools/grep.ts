@@ -15,7 +15,7 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { tool } from 'langchain'
-import { z } from 'zod/v4'
+import { z } from 'zod'
 import { TOOL_DESCRIPTIONS, TOOL_NAMES } from './toolNames.js'
 import { DEFAULT_SKIP_DIRS, ensureAbsolute, isBinaryFile, truncateLine } from './fsUtils.js'
 

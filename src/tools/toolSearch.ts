@@ -13,7 +13,7 @@
 
 import { tool } from 'langchain'
 import { Command } from '@langchain/langgraph'
-import { z } from 'zod/v4'
+import { z } from 'zod'
 import { DeferredToolRegistry, type DeferredToolMeta } from './deferredRegistry.js'
 
 export { DeferredToolRegistry, type DeferredToolMeta }

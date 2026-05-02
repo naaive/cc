@@ -14,7 +14,7 @@
  */
 
 import { tool } from 'langchain'
-import { z } from 'zod/v4'
+import { z } from 'zod'
 import {
   readSkillBody,
   type SkillMetadata,

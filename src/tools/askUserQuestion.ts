@@ -9,7 +9,7 @@
  */
 
 import { tool } from 'langchain'
-import { z } from 'zod/v4'
+import { z } from 'zod'
 import { createInterface } from 'node:readline'
 import { TOOL_DESCRIPTIONS, TOOL_NAMES } from './toolNames.js'
 

@@ -16,7 +16,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { tool } from 'langchain'
-import { z } from 'zod/v4'
+import { z } from 'zod'
 
 export interface ConfigSettingSpec {
   /** Dot-notation path inside settings.json (e.g. "model", "permissionMode"). */

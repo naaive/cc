@@ -21,7 +21,7 @@ import {
   type AgentMiddleware,
   type BaseMessage,
 } from 'langchain'
-import { z } from 'zod/v4'
+import { z } from 'zod'
 import { ccReminders, type Reminder, type ReminderContext } from './reminders.js'
 import type { Todo } from '../tools/todoWrite.js'
 import type { PermissionMode } from '../permissionMode.js'

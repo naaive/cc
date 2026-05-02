@@ -20,6 +20,7 @@ import {
   createDiscoverSlashCommandsTool,
   createEditTool,
   createExitPlanModeTool,
+  createFileStateGuard,
   createGlobTool,
   createGrepTool,
   createMonitorTool,
@@ -92,6 +93,10 @@ export interface BuildToolsResult {
 export function buildTools(input: BuildToolsInput): BuildToolsResult {
   const isEnabled = makeEnabledChecker(input)
   const ccTools: StructuredTool[] = []
+  const fileStateGuard = createFileStateGuard({
+    cache: input.fileStateCache,
+    resultStore: input.resultStore,
+  })
 
   if (isEnabled(TOOL_NAMES.Bash)) {
     const bundle = createBashTools({
@@ -109,8 +114,7 @@ export function buildTools(input: BuildToolsInput): BuildToolsResult {
   if (isEnabled(TOOL_NAMES.Read))
     ccTools.push(
       createReadTool({
-        fileStateCache: input.fileStateCache,
-        resultStore: input.resultStore ?? undefined,
+        fileStateGuard,
         cwd: input.cwd,
         additionalDirectories: input.additionalDirectories,
         onFileRead: input.skillActivator
@@ -121,7 +125,7 @@ export function buildTools(input: BuildToolsInput): BuildToolsResult {
   if (isEnabled(TOOL_NAMES.Write))
     ccTools.push(
       createWriteTool({
-        fileStateCache: input.fileStateCache,
+        fileStateGuard,
         cwd: input.cwd,
         additionalDirectories: input.additionalDirectories,
       }),
@@ -129,7 +133,7 @@ export function buildTools(input: BuildToolsInput): BuildToolsResult {
   if (isEnabled(TOOL_NAMES.Edit))
     ccTools.push(
       createEditTool({
-        fileStateCache: input.fileStateCache,
+        fileStateGuard,
         cwd: input.cwd,
         additionalDirectories: input.additionalDirectories,
       }),

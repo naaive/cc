@@ -42,8 +42,7 @@ import {
   type Reminder,
   type SummarizationMiddlewareOptions,
 } from '../middleware/index.js'
-import type { PermissionMode } from '../permissionMode.js'
-import type { PermissionRule } from '../permissionRules.js'
+import type { PermissionMode, PermissionRule } from '../permission.js'
 import type { Settings } from '../settings.js'
 import type {
   FileStateCache,

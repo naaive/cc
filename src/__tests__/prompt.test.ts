@@ -1,41 +1,43 @@
 import { describe, expect, test } from 'bun:test'
 import {
-  buildCacheableSystemBlocks,
-  buildEnvBlock,
-  buildSystemPrompt,
-  EMBEDDED_AGENT_IDENTITY,
   AGENT_IDENTITY,
+  buildEnvBlock,
   DOING_TASKS_SECTION,
+  EMBEDDED_AGENT_IDENTITY,
   INTRO_BLOCK,
   SYSTEM_SECTION,
   TONE_SECTION,
   TOOL_USE_POLICY,
 } from '../prompt.js'
+import {
+  assembleSystemPrompt,
+  buildCacheableSystemBlocks,
+} from '../agent/systemPromptAssembly.js'
 
-describe('buildSystemPrompt', () => {
-  const env = {
-    cwd: '/tmp/repo',
-    platform: 'linux' as const,
-    osRelease: 'Linux 6.18',
-    shell: '/bin/bash',
-    isGitRepo: true,
-    today: '2026-05-02',
-    modelId: 'claude-sonnet-4-6',
-  }
+const env = {
+  cwd: '/tmp/repo',
+  platform: 'linux' as const,
+  osRelease: 'Linux 6.18',
+  shell: '/bin/bash',
+  isGitRepo: true,
+  today: '2026-05-02',
+  modelId: 'claude-sonnet-4-6',
+}
 
+describe('assembleSystemPrompt', () => {
   test('includes the agent identity prefix', () => {
-    const out = buildSystemPrompt({ env })
+    const out = assembleSystemPrompt({ env })
     expect(out).toContain(AGENT_IDENTITY)
   })
 
   test('uses the embedded-agent prefix when embedded=true', () => {
-    const out = buildSystemPrompt({ env, embedded: true })
+    const out = assembleSystemPrompt({ env, embedded: true })
     expect(out).toContain(EMBEDDED_AGENT_IDENTITY)
     expect(out).not.toContain(AGENT_IDENTITY + '\n')
   })
 
   test('contains every standard section header', () => {
-    const out = buildSystemPrompt({ env })
+    const out = assembleSystemPrompt({ env })
     expect(out).toContain('# System')
     expect(out).toContain('# Doing tasks')
     expect(out).toContain('# Tone and style')
@@ -45,7 +47,7 @@ describe('buildSystemPrompt', () => {
   })
 
   test('environment block has cwd, platform, git, today, model', () => {
-    const out = buildSystemPrompt({ env })
+    const out = assembleSystemPrompt({ env })
     expect(out).toContain('Primary working directory: /tmp/repo')
     expect(out).toContain('Is a git repository: true')
     expect(out).toContain('Platform: linux')
@@ -54,12 +56,12 @@ describe('buildSystemPrompt', () => {
   })
 
   test('appendix is appended at the very end', () => {
-    const out = buildSystemPrompt({ env, appendix: 'EXTRA_NOTE' })
+    const out = assembleSystemPrompt({ env, systemPromptAppendix: 'EXTRA_NOTE' })
     expect(out.endsWith('EXTRA_NOTE')).toBe(true)
   })
 
   test('identityOverride replaces only the identity prefix', () => {
-    const out = buildSystemPrompt({
+    const out = assembleSystemPrompt({
       env,
       identityOverride: 'You are Foobar.',
     })
@@ -70,7 +72,7 @@ describe('buildSystemPrompt', () => {
   })
 
   test('projectMemory section is rendered when entries are present', () => {
-    const out = buildSystemPrompt({
+    const out = assembleSystemPrompt({
       env,
       projectMemory: [
         {
@@ -86,7 +88,7 @@ describe('buildSystemPrompt', () => {
   })
 
   test('intro block has the cybersec + URL guidance', () => {
-    const out = buildSystemPrompt({ env })
+    const out = assembleSystemPrompt({ env })
     expect(out).toContain(INTRO_BLOCK)
     expect(out).toContain('NEVER generate or guess URLs')
   })
@@ -100,6 +102,23 @@ describe('buildSystemPrompt', () => {
     expect(TOOL_USE_POLICY).toContain('Bash')
     expect(TOOL_USE_POLICY).toContain('TodoWrite')
     expect(TOOL_USE_POLICY).toContain('Agent')
+  })
+
+  test('skills listing is appended after the appendix', () => {
+    const out = assembleSystemPrompt({
+      env,
+      skills: [
+        {
+          name: 'demo',
+          description: 'A demo skill',
+          path: '/x/SKILL.md',
+          source: 'project',
+        },
+      ],
+    })
+    expect(out).toContain('# Skills')
+    expect(out).toContain('demo')
+    expect(out).toContain('A demo skill')
   })
 })
 
@@ -123,7 +142,7 @@ describe('buildEnvBlock', () => {
 })
 
 describe('buildCacheableSystemBlocks (4-breakpoint cache strategy)', () => {
-  const env = {
+  const env2 = {
     cwd: '/tmp/x',
     platform: 'linux' as const,
     osRelease: 'L',
@@ -134,7 +153,7 @@ describe('buildCacheableSystemBlocks (4-breakpoint cache strategy)', () => {
   }
 
   test('returns three blocks: identity+intro, behavior, env+memory', () => {
-    const blocks = buildCacheableSystemBlocks({ env })
+    const blocks = buildCacheableSystemBlocks({ env: env2 })
     expect(blocks.length).toBe(3)
     expect(blocks[0]!.text).toContain(AGENT_IDENTITY)
     expect(blocks[0]!.text).toContain('NEVER generate or guess URLs')
@@ -145,12 +164,15 @@ describe('buildCacheableSystemBlocks (4-breakpoint cache strategy)', () => {
   })
 
   test('all three are cacheable by default', () => {
-    const blocks = buildCacheableSystemBlocks({ env })
+    const blocks = buildCacheableSystemBlocks({ env: env2 })
     expect(blocks.every(b => b.cacheable)).toBe(true)
   })
 
   test('appendix lands in the third (env-tier) block', () => {
-    const blocks = buildCacheableSystemBlocks({ env, appendix: 'EXTRA' })
+    const blocks = buildCacheableSystemBlocks({
+      env: env2,
+      systemPromptAppendix: 'EXTRA',
+    })
     expect(blocks[2]!.text).toContain('EXTRA')
   })
 })

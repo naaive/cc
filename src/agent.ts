@@ -56,8 +56,7 @@ import {
   type SkillMetadata,
 } from './skills/index.js'
 import type { OutputStyle } from './outputStyles.js'
-import type { PermissionMode } from './permissionMode.js'
-import type { PermissionRule } from './permissionRules.js'
+import type { PermissionMode, PermissionRule } from './permission.js'
 import type { MultiServerMCPClient } from './mcp/index.js'
 import type {
   ErrorRetryGuardOptions,

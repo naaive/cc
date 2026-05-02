@@ -30,9 +30,9 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { parseFrontmatter } from '../lib/yamlFrontmatter.js'
 
 export const MAX_COMMAND_FILE_SIZE = 10 * 1024 * 1024
-const FRONTMATTER_PATTERN = /^---\s*\n([\s\S]*?)\n---\s*\n/
 // Must start with a letter (to disambiguate from numeric prefixes that
 // usually indicate accidental file names). Same lower-kebab convention
 // as the Skills spec.
@@ -120,19 +120,17 @@ export function parseCommandFile(
   } catch {
     return null
   }
-  const fmMatch = raw.match(FRONTMATTER_PATTERN)
-  const body = fmMatch ? raw.slice(fmMatch[0].length) : raw
-  const fm = fmMatch ? parseSimpleYaml(fmMatch[1]!) : {}
+  const { fields, body } = parseFrontmatter(raw)
   const cmd: CustomCommand = {
     name,
     body,
     source,
     path: filePath,
   }
-  if (typeof fm['description'] === 'string') cmd.description = fm['description']
-  if (typeof fm['argument-hint'] === 'string') cmd.argumentHint = fm['argument-hint']
-  if (typeof fm['allowed-tools'] === 'string') cmd.allowedTools = fm['allowed-tools']
-  if (typeof fm['model'] === 'string') cmd.model = fm['model']
+  if (typeof fields['description'] === 'string') cmd.description = fields['description']
+  if (typeof fields['argument-hint'] === 'string') cmd.argumentHint = fields['argument-hint']
+  if (typeof fields['allowed-tools'] === 'string') cmd.allowedTools = fields['allowed-tools']
+  if (typeof fields['model'] === 'string') cmd.model = fields['model']
   return cmd
 }
 
@@ -140,25 +138,4 @@ function isValidCommandName(name: string): boolean {
   if (!name) return false
   // Allow ":" to separate namespaces; each segment must match the pattern.
   return name.split(':').every(seg => COMMAND_NAME_PATTERN.test(seg))
-}
-
-/** Tiny YAML subset parser (key: value lines only — same as skills loader). */
-function parseSimpleYaml(text: string): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (const line of text.split('\n')) {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('#')) continue
-    const colon = trimmed.indexOf(':')
-    if (colon < 0) continue
-    const key = trimmed.slice(0, colon).trim()
-    let value = trimmed.slice(colon + 1).trim()
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1)
-    }
-    out[key] = value
-  }
-  return out
 }

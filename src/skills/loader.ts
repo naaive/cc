@@ -16,13 +16,13 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { parseFrontmatter } from '../lib/yamlFrontmatter.js'
 
 export const MAX_SKILL_FILE_SIZE = 10 * 1024 * 1024
 export const MAX_SKILL_NAME_LENGTH = 64
 export const MAX_SKILL_DESCRIPTION_LENGTH = 1024
 
 const SKILL_NAME_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/
-const FRONTMATTER_PATTERN = /^---\s*\n([\s\S]*?)\n---\s*\n/
 
 export interface SkillMetadata {
   name: string
@@ -112,11 +112,11 @@ export function parseSkillMetadata(
   filePath: string,
   source: 'user' | 'project' | 'inline',
 ): SkillMetadata | null {
-  const m = raw.match(FRONTMATTER_PATTERN)
-  if (!m) return null
-  const fm = parseSimpleYaml(m[1]!)
-  const name = fm.name
-  const description = fm.description
+  const fm = parseFrontmatter(raw)
+  if (!fm.hasFrontmatter) return null
+  const { fields } = fm
+  const name = fields.name
+  const description = fields.description
   if (typeof name !== 'string' || typeof description !== 'string') return null
   if (name.length > MAX_SKILL_NAME_LENGTH) return null
   if (description.length > MAX_SKILL_DESCRIPTION_LENGTH) return null
@@ -127,43 +127,18 @@ export function parseSkillMetadata(
     path: filePath,
     source,
   }
-  if (typeof fm.license === 'string') out.license = fm.license
-  if (typeof fm.compatibility === 'string') out.compatibility = fm.compatibility
-  if (typeof fm['allowed-tools'] === 'string')
-    out.allowedTools = fm['allowed-tools']
+  if (typeof fields.license === 'string') out.license = fields.license
+  if (typeof fields.compatibility === 'string') out.compatibility = fields.compatibility
+  if (typeof fields['allowed-tools'] === 'string')
+    out.allowedTools = fields['allowed-tools']
   // Conditional activation: a comma-separated list of glob patterns. When
   // the agent reads a file matching any pattern, the skill body is queued
   // as a system reminder for the next turn (by design).
-  if (typeof fm['activate-paths'] === 'string') {
-    out.activatePaths = fm['activate-paths']
+  if (typeof fields['activate-paths'] === 'string') {
+    out.activatePaths = fields['activate-paths']
       .split(',')
       .map(s => s.trim())
       .filter(Boolean)
-  }
-  return out
-}
-
-/**
- * Tiny YAML subset parser. Handles `key: value` lines and nothing else —
- * Agent Skills frontmatter is intentionally flat. We avoid pulling in a
- * full YAML parser just to read four scalar fields.
- */
-function parseSimpleYaml(text: string): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (const line of text.split('\n')) {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('#')) continue
-    const colon = trimmed.indexOf(':')
-    if (colon < 0) continue
-    const key = trimmed.slice(0, colon).trim()
-    let value = trimmed.slice(colon + 1).trim()
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1)
-    }
-    out[key] = value
   }
   return out
 }
@@ -174,5 +149,5 @@ function parseSimpleYaml(text: string): Record<string, string> {
  */
 export function readSkillBody(filePath: string): string {
   const raw = fs.readFileSync(filePath, 'utf8')
-  return raw.replace(FRONTMATTER_PATTERN, '').trimStart()
+  return parseFrontmatter(raw).body.trimStart()
 }

@@ -1,9 +1,13 @@
 import { describe, expect, test } from 'bun:test'
-import { ccReminders, type ReminderContext } from '../middleware/reminders.js'
+import {
+  ccReminders,
+  createReminderStore,
+  type ReminderContext,
+} from '../middleware/reminders.js'
 
 function ctx(overrides: Partial<ReminderContext> = {}): ReminderContext {
   return {
-    state: {},
+    store: createReminderStore({}, 'test'),
     turn: 1,
     lastUserText: '',
     todos: [],

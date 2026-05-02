@@ -13,7 +13,7 @@ import { tool } from 'langchain'
 import { Command } from '@langchain/langgraph'
 import { z } from 'zod'
 import { TOOL_DESCRIPTIONS, TOOL_NAMES } from './toolNames.js'
-import type { PermissionMode } from '../permissionMode.js'
+import type { PermissionMode } from '../permission.js'
 
 const exitSchema = z.object({
   plan: z

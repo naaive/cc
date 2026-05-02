@@ -125,6 +125,12 @@ export {
   type FileStateCache,
   type ResolvedRoots,
 } from './fsUtils.js'
+export {
+  createFileStateGuard,
+  FILE_UNCHANGED_STUB,
+  type FileStateGuard,
+  type FileStateGuardOptions,
+} from './fileStateGuard.js'
 
 // Context-engineering primitives (host-facing).
 export {
